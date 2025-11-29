@@ -248,8 +248,9 @@ def filter_binary_classes(epochs, reject_artifacts=True, verbose=False):
     if reject_artifacts and hasattr(epochs_binary, 'drop_bad'):
         epochs_binary.drop_bad()
 
-    # Get data and labels
-    X = epochs_binary.get_data()  # (n_trials, n_channels, n_times)
+    # Get data and labels (pick only EEG channels by excluding EOG explicitly)
+    eeg_picks = [ch for ch in epochs_binary.ch_names if ch.startswith('EEG')]
+    X = epochs_binary.get_data(picks=eeg_picks)  # (n_trials, n_eeg_channels, n_times)
     y = epochs_binary.events[:, 2]  # Event codes (remapped by MNE)
 
     # Get actual event codes from epochs
@@ -354,8 +355,9 @@ def filter_multiclass(epochs, reject_artifacts=True, verbose=False):
     if reject_artifacts and hasattr(epochs, 'drop_bad'):
         epochs.drop_bad()
 
-    # Get data and labels
-    X = epochs.get_data()  # (n_trials, n_channels, n_times)
+    # Get data and labels (pick only EEG channels by excluding EOG explicitly)
+    eeg_picks = [ch for ch in epochs.ch_names if ch.startswith('EEG')]
+    X = epochs.get_data(picks=eeg_picks)  # (n_trials, n_eeg_channels, n_times)
     y = epochs.events[:, 2]  # Event codes (remapped by MNE)
 
     # Get actual event codes from epochs
