@@ -1,5 +1,9 @@
 """
 CSP + LDA pipeline for motor imagery classification.
+
+This classifier intelligently handles both:
+- Raw EEG data: shape (n_trials, n_channels, n_times) -> applies CSP then LDA
+- CSP features: shape (n_trials, n_components) -> applies LDA directly
 """
 
 import numpy as np
@@ -12,12 +16,16 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
     """
     Combined CSP + LDA classifier for EEG motor imagery.
 
+    This classifier can handle both:
+    - Raw EEG data: shape (n_trials, n_channels, n_times) -> applies CSP then LDA
+    - Pre-computed CSP features: shape (n_trials, n_components) -> applies LDA directly
+
     Parameters
     ----------
     n_components : int
         Number of CSP components to extract (default: 4).
-    reg : float or None
-        LDA regularization parameter (default: None for no regularization).
+    reg : float, str, or None
+        LDA regularization parameter. Use 'auto' for automatic shrinkage.
     """
 
     def __init__(self, n_components=4, reg=None):
@@ -25,6 +33,7 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
         self.reg = reg
         self.csp = CSP(n_components=n_components, reg=None, log=True, norm_trace=False)
         self.lda = LinearDiscriminantAnalysis(solver='lsqr', shrinkage=reg)
+        self._n_eeg_channels = None  # Set during fit
 
     def fit(self, X, y):
         """
@@ -41,6 +50,9 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
         -------
         self
         """
+        # Store number of EEG channels for later inference
+        self._n_eeg_channels = X.shape[1]
+        
         # Extract CSP features
         self.csp.fit(X, y)
         X_csp = self.csp.transform(X)
@@ -50,25 +62,55 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
 
         return self
 
+    def _is_csp_features(self, X):
+        """
+        Check if input is already CSP features (2D) or raw EEG (3D).
+        
+        Parameters
+        ----------
+        X : ndarray
+            Input data.
+            
+        Returns
+        -------
+        bool
+            True if X appears to be CSP features, False if raw EEG.
+        """
+        # 3D array is definitely raw EEG
+        if X.ndim == 3:
+            return False
+        
+        # 2D array is CSP features (or some other transformed representation)
+        if X.ndim == 2:
+            return True
+        
+        raise ValueError(
+            f"Cannot determine if input (shape {X.shape}) is raw EEG or CSP features. "
+            f"Expected 3D for raw EEG or 2D for CSP features."
+        )
+
     def predict(self, X):
         """
         Predict class labels.
 
         Parameters
         ----------
-        X : ndarray, shape (n_trials, n_channels, n_times)
-            EEG epoch data.
+        X : ndarray
+            Either raw EEG data (n_trials, n_channels, n_times) or
+            CSP features (n_trials, n_components).
 
         Returns
         -------
         y_pred : ndarray, shape (n_trials,)
             Predicted class labels.
         """
-        # Transform using CSP
-        X_csp = self.csp.transform(X)
-
-        # Predict using LDA
-        return self.lda.predict(X_csp)
+        if self._is_csp_features(X):
+            # Input is already CSP features, use LDA directly
+            return self.lda.predict(X)
+        else:
+            # Input is raw EEG, apply CSP first
+            X_csp = self.csp.transform(X)
+            return self.lda.predict(X_csp)
 
     def predict_proba(self, X):
         """
@@ -76,16 +118,20 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
 
         Parameters
         ----------
-        X : ndarray, shape (n_trials, n_channels, n_times)
-            EEG epoch data.
+        X : ndarray
+            Either raw EEG data (n_trials, n_channels, n_times) or
+            CSP features (n_trials, n_components).
 
         Returns
         -------
         proba : ndarray, shape (n_trials, n_classes)
             Class probabilities.
         """
-        X_csp = self.csp.transform(X)
-        return self.lda.predict_proba(X_csp)
+        if self._is_csp_features(X):
+            return self.lda.predict_proba(X)
+        else:
+            X_csp = self.csp.transform(X)
+            return self.lda.predict_proba(X_csp)
 
     def score(self, X, y):
         """
@@ -93,8 +139,9 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
 
         Parameters
         ----------
-        X : ndarray, shape (n_trials, n_channels, n_times)
-            EEG epoch data.
+        X : ndarray
+            Either raw EEG data (n_trials, n_channels, n_times) or
+            CSP features (n_trials, n_components).
         y : ndarray, shape (n_trials,)
             True class labels.
 
@@ -103,12 +150,15 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
         accuracy : float
             Classification accuracy.
         """
-        X_csp = self.csp.transform(X)
-        return self.lda.score(X_csp, y)
+        if self._is_csp_features(X):
+            return self.lda.score(X, y)
+        else:
+            X_csp = self.csp.transform(X)
+            return self.lda.score(X_csp, y)
 
     def transform(self, X):
         """
-        Transform data using CSP (for OTDA).
+        Transform data using CSP.
 
         Parameters
         ----------

@@ -264,8 +264,10 @@ if __name__ == "__main__":
 
     # Data paths
     data_dir = Path(__file__).parent.parent / "data"
-    source_path = data_dir / "A01E.gdf"
-    target_path = data_dir / "A01T.gdf"
+    # Cross-session: Train on T (training), test on E (evaluation with true labels)
+    source_path = data_dir / "gdf" / "A01T.gdf"
+    target_path = data_dir / "gdf" / "A01E.gdf"
+    target_labels_path = data_dir / "labels" / "A01E.mat"
 
     # EEG channel configuration (BNCI2014_001 dataset)
     eeg_channels = [
@@ -289,7 +291,7 @@ if __name__ == "__main__":
         verbose=True
     )
 
-    # Load target domain (subject A01, training session)
+    # Load target domain (evaluation session with true labels)
     print(f"\nLoading target: {target_path.name}")
     X_target, y_target, _ = load_session_binary_mi(
         str(target_path),
@@ -299,6 +301,7 @@ if __name__ == "__main__":
         tmax=2.5,
         l_freq=8,
         h_freq=30,
+        true_labels_path=str(target_labels_path),
         verbose=True
     )
 

@@ -24,7 +24,25 @@ def compute_eog_regression_coefficients(blocks, eeg_channels, eog_channels):
     return coefficients  
 
 def apply_eog_regression(raw, coefficients, eeg_channels, eog_channels):
-    """Removes EOG artifacts from a Raw object using regression coefficients."""
+    """
+    Removes EOG artifacts from a Raw object using regression coefficients.
+
+    Parameters
+    ----------
+    raw : mne.io.Raw
+        Raw EEG data.
+    coefficients : ndarray, shape (n_eeg_channels, n_eog_channels)
+        Regression coefficients from EOG calibration.
+    eeg_channels : list of str
+        EEG channel names.
+    eog_channels : list of str
+        EOG channel names.
+
+    Returns
+    -------
+    mne.io.Raw
+        Cleaned Raw object.
+    """
     raw_clean = raw.copy()
 
     eeg_data = raw_clean.get_data(picks=eeg_channels)  # (22, n_samples)
@@ -42,7 +60,29 @@ def apply_eog_regression(raw, coefficients, eeg_channels, eog_channels):
 
 
 def preprocess_blocks(blocks, eeg_channels, eog_channels, l_freq=8, h_freq=30):
-    """Applies EOG regression and bandpass filter to all runs."""
+    """
+    Applies EOG regression and bandpass filter to all runs.
+
+    Parameters
+    ----------
+    blocks : dict
+        Dictionary of Raw objects from organize_session_by_blocks.
+    eeg_channels : list of str
+        EEG channel names.
+    eog_channels : list of str
+        EOG channel names.
+    l_freq : float
+        Lowcut frequency in Hz.
+    h_freq : float
+        Highcut frequency in Hz.
+
+    Returns
+    -------
+    clean_runs : dict
+        Dictionary of preprocessed runs.
+    coefficients : ndarray
+        EOG regression coefficients.
+    """
     # Compute coefficients from calibration blocks
     coefficients = compute_eog_regression_coefficients(blocks, eeg_channels, eog_channels)
 

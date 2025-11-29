@@ -1,9 +1,128 @@
+"""
+Data loading and preprocessing for BNCI2014_001 dataset.
+
+Handles:
+- GDF file loading with proper event extraction
+- True label mapping for evaluation files
+- EOG artifact removal via regression
+- Epoch extraction for MI classification
+"""
+
 import mne
 import numpy as np
-from preprocessing import compute_eog_regression_coefficients
+import scipy.io
+from pathlib import Path
+from preprocessing import preprocess_blocks
 
 
-def organize_session_by_blocks(filepath, verbose=False):
+def load_true_labels(mat_filepath):
+    """
+    Loads true labels from MAT file.
+
+    Parameters
+    ----------
+    mat_filepath : str
+        Path to MAT file containing true labels.
+
+    Returns
+    -------
+    labels : ndarray, shape (288,)
+        Class labels (1=left, 2=right, 3=feet, 4=tongue).
+    """
+    mat = scipy.io.loadmat(mat_filepath)
+    labels = mat['classlabel'].flatten()
+    return labels
+
+
+def apply_true_labels_to_raw(raw, true_labels, verbose=False):
+    """
+    Replaces 783 (unknown cue) events with true class labels.
+
+    Parameters
+    ----------
+    raw : mne.io.Raw
+        Raw object with 783 events.
+    true_labels : ndarray, shape (n_trials,)
+        True class labels (1=left, 2=right, 3=feet, 4=tongue).
+    verbose : bool
+        Print replacement info.
+
+    Returns
+    -------
+    mne.io.Raw
+        Raw object with corrected event annotations.
+    """
+    raw_corrected = raw.copy()
+    events, event_id = mne.events_from_annotations(raw_corrected, verbose=False)
+
+    # Find code for event 783 (unknown cue)
+    cue_unknown_code = None
+    for name, code in event_id.items():
+        if name == '783':  # Exact match, not substring
+            cue_unknown_code = code
+            break
+
+    if cue_unknown_code is None:
+        if verbose:
+            print("No 783 events found, assuming labels are already present")
+        return raw_corrected
+
+    # Find all 783 events
+    unknown_indices = np.where(events[:, 2] == cue_unknown_code)[0]
+
+    if len(unknown_indices) != len(true_labels):
+        # Fallback logic if lengths mismatch slightly (sometimes happens in GDFs)
+        print(f"Warning: Mismatch: {len(unknown_indices)} unknown events but {len(true_labels)} labels provided. Truncating to min.")
+        min_len = min(len(unknown_indices), len(true_labels))
+        unknown_indices = unknown_indices[:min_len]
+        true_labels = true_labels[:min_len]
+
+    if verbose:
+        print(f"Replacing {len(unknown_indices)} event 783 with true class labels")
+
+    # Create new annotations list
+    new_onsets = []
+    new_durations = []
+    new_descriptions = []
+
+    # Map class labels to event descriptions
+    label_to_desc = {1: '769', 2: '770', 3: '771', 4: '772'}
+
+    trial_idx = 0
+
+    unknown_indices_set = set(unknown_indices)
+    
+    # Re-extract events to map index back to annotation 
+    current_unknown_count = 0
+    for annot in raw_corrected.annotations:
+        desc = annot['description']
+        if desc == '783':
+            if current_unknown_count < len(true_labels):
+                new_desc = label_to_desc[true_labels[current_unknown_count]]
+                new_descriptions.append(new_desc)
+                current_unknown_count += 1
+            else:
+                new_descriptions.append(desc) 
+        else:
+            new_descriptions.append(desc)
+
+        new_onsets.append(annot['onset'])
+        new_durations.append(annot['duration'])
+
+    # Create new Annotations object
+    new_annotations = mne.Annotations(
+        onset=new_onsets,
+        duration=new_durations,
+        description=new_descriptions,
+        orig_time=raw_corrected.annotations.orig_time
+    )
+
+    raw_corrected.set_annotations(new_annotations)
+
+    return raw_corrected
+
+
+def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
     """
     Organizes a session GDF file into EOG calibration blocks and MI runs.
 
@@ -11,38 +130,50 @@ def organize_session_by_blocks(filepath, verbose=False):
     ----------
     filepath : str
         Path to GDF file.
+    true_labels_path : str, optional
+        Path to MAT file with true labels (for evaluation files).
     verbose : bool
         Print extraction info.
 
     Returns
     -------
     dict
-        Dictionary with keys 'eog_eyes_open', 'eog_eyes_closed', 'eog_eye_movements', 'run_0', ..., 'run_N'.
+        Dictionary with keys 'eog_eyes_open', 'eog_eyes_closed', 'eog_eye_movements', 'run_0', ..., 'run_5'.
     """
     raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=False)
+
+    # Apply true labels if provided (for evaluation files)
+    if true_labels_path is not None:
+        true_labels = load_true_labels(true_labels_path)
+        raw = apply_true_labels_to_raw(raw, true_labels, verbose=verbose)
+
     events, event_id = mne.events_from_annotations(raw, verbose=False)
 
     blocks = {}
     sfreq = raw.info['sfreq']
+
+    def extract_segment(start_sample, end_sample):
+        """Extracts a time segment from raw data."""
+        tmin = start_sample / sfreq
+        tmax = min(end_sample / sfreq, raw.times[-1])
+        # Buffer to avoid boundary issues
+        if tmax > tmin: 
+             return raw.copy().crop(tmin=tmin, tmax=tmax - 0.001)
+        return raw.copy().crop(tmin=tmin, tmax=tmax)
+
+    def find_event_code(target_code):
+        """Finds MNE event code matching target code number (exact match)."""
+        for name, code in event_id.items():
+            if name == str(target_code):  # Exact match
+                return code
+        return None
 
     # Event codes from BNCI2014_001 dataset
     EOG_EYES_OPEN = 276
     EOG_EYES_CLOSED = 277
     EOG_EYE_MOVEMENTS = 1072
     RUN_START = 32766
-
-    def extract_segment(start_sample, end_sample):
-        """Extracts a time segment from raw data."""
-        tmin = start_sample / sfreq
-        tmax = min(end_sample / sfreq, raw.times[-1])
-        return raw.copy().crop(tmin=tmin, tmax=tmax)
-
-    def find_event_code(target_code):
-        """Finds MNE event code matching target code number."""
-        for name, code in event_id.items():
-            if str(target_code) in name:
-                return code
-        return None
+    TRIAL_START = 768
 
     # Extract EOG calibration blocks
     eog_codes = {
@@ -51,100 +182,64 @@ def organize_session_by_blocks(filepath, verbose=False):
         'eog_eye_movements': find_event_code(EOG_EYE_MOVEMENTS)
     }
 
+    # Find when EOG section ends (last EOG event)
+    eog_end_sample = 0
     for block_name, code in eog_codes.items():
         if code is not None:
             mask = events[:, 2] == code
             if np.any(mask):
                 event_idx = np.where(mask)[0][0]
                 start_sample = events[event_idx, 0]
-                end_sample = events[event_idx + 1, 0] if event_idx + 1 < len(events) else len(raw.times)
+                # Find end: next event after this one
+                end_sample = events[event_idx + 1, 0] if event_idx + 1 < len(events) else int(len(raw.times) * sfreq)
                 blocks[block_name] = extract_segment(start_sample, end_sample)
+                eog_end_sample = max(eog_end_sample, end_sample)
 
-    # Extract MI runs
+    # Extract MI runs - only those AFTER EOG section and containing trials
     run_code = find_event_code(RUN_START)
+    trial_code = find_event_code(TRIAL_START)
+    
     if run_code is not None:
-        run_starts = events[events[:, 2] == run_code, 0]
+        run_start_samples = events[events[:, 2] == run_code, 0]
+        
 
-        for i, start_sample in enumerate(run_starts):
-            end_sample = run_starts[i + 1] if i + 1 < len(run_starts) else len(raw.times)
-            blocks[f'run_{i}'] = extract_segment(start_sample, end_sample)
+        mi_run_starts = run_start_samples[run_start_samples >= eog_end_sample]
+        
+        if verbose:
+            print(f"Found {len(run_start_samples)} total run markers, {len(mi_run_starts)} are MI runs (after EOG)")
+        
+        # Get trial start samples for validation
+        if trial_code is not None:
+            trial_samples = events[events[:, 2] == trial_code, 0]
+        else:
+            trial_samples = np.array([])
+        
+        run_idx = 0
+        for i, start_sample in enumerate(mi_run_starts):
+            # Determine end of this run
+            # Find index in original run_start_samples to get the NEXT run start
+            original_idx = np.where(run_start_samples == start_sample)[0][0]
+            
+            if original_idx + 1 < len(run_start_samples):
+                end_sample = run_start_samples[original_idx + 1]
+            else:
+                end_sample = int(len(raw.times) * sfreq)
+            
+            # Count trials in this run segment
+            trials_in_run = np.sum((trial_samples >= start_sample) & (trial_samples < end_sample))
+            
+            # Ignore runs with 0 trials
+            if trials_in_run > 0:  
+                blocks[f'run_{run_idx}'] = extract_segment(start_sample, end_sample)
+                if verbose:
+                    print(f"  run_{run_idx}: {trials_in_run} trials")
+                run_idx += 1
 
     if verbose:
         print(f"Extracted blocks: {list(blocks.keys())}")
 
     return blocks
 
-def apply_eog_regression(raw, coefficients, eeg_channels, eog_channels):
-    """
-    Removes EOG artifacts from a Raw object using regression coefficients.
-
-    Parameters
-    ----------
-    raw : mne.io.Raw
-        Raw EEG data.
-    coefficients : ndarray, shape (n_eeg_channels, n_eog_channels)
-        Regression coefficients from EOG calibration.
-    eeg_channels : list of str
-        EEG channel names.
-    eog_channels : list of str
-        EOG channel names.
-
-    Returns
-    -------
-    mne.io.Raw
-        Cleaned Raw object.
-    """
-    raw_clean = raw.copy()
-
-    eeg_data = raw_clean.get_data(picks=eeg_channels)  # (22, n_samples)
-    eog_data = raw_clean.get_data(picks=eog_channels)  # (3, n_samples)
-
-    # Clean: EEG_clean = EEG - beta @ EOG
-    eeg_clean = eeg_data - coefficients @ eog_data  # (22,3) @ (3,n) = (22,n)
-
-    # Update raw data
-    for i, ch in enumerate(eeg_channels):
-        idx = raw_clean.ch_names.index(ch)
-        raw_clean._data[idx, :] = eeg_clean[i, :]
-
-    return raw_clean
-
-
-def preprocess_blocks(blocks, eeg_channels, eog_channels, l_freq=8, h_freq=30):
-    """
-    Applies EOG regression and bandpass filter to all runs.
-
-    Parameters
-    ----------
-    blocks : dict
-        Dictionary of Raw objects from organize_session_by_blocks.
-    eeg_channels : list of str
-        EEG channel names.
-    eog_channels : list of str
-        EOG channel names.
-    l_freq : float
-        Lowcut frequency in Hz.
-    h_freq : float
-        Highcut frequency in Hz.
-
-    Returns
-    -------
-    clean_runs : dict
-        Dictionary of preprocessed runs.
-    coefficients : ndarray
-        EOG regression coefficients.
-    """
-    # Compute coefficients from calibration blocks
-    coefficients = compute_eog_regression_coefficients(blocks, eeg_channels, eog_channels)
-
-    clean_runs = {}
-    for key, raw in blocks.items():
-        if key.startswith('run_'):
-            raw_clean = apply_eog_regression(raw, coefficients, eeg_channels, eog_channels)
-            raw_clean.filter(l_freq, h_freq, verbose=False)
-            clean_runs[key] = raw_clean
-
-    return clean_runs, coefficients
 
 
 def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verbose=False):
@@ -171,38 +266,63 @@ def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verb
     """
     all_epochs = []
 
-    for run_name, raw in clean_runs.items():
+    # Fixed event_id mapping to ensure consistency across runs
+    fixed_event_id = {
+        'left_hand': 1,
+        'right_hand': 2,
+        'feet': 3,
+        'tongue': 4
+    }
+
+    # MI cue event codes (original GDF values)
+    MI_EVENT_NAMES = {'769', '770', '771', '772'}
+
+    for run_name in sorted(clean_runs.keys()):  # Sort to ensure consistent order
+        raw = clean_runs[run_name]
         events, event_id_raw = mne.events_from_annotations(raw, verbose=False)
 
-        # Filter event_id to keep only MI cues (original codes 769-772)
-        event_id = {
-            name: code for name, code in event_id_raw.items()
-            if name in ['769', '770', '771', '772']
-        }
-
-        # Rename to meaningful labels
-        event_id_renamed = {}
-        for name, code in event_id.items():
+        # Map original event codes to fixed codes
+        event_mapping = {}
+        for name, code in event_id_raw.items():
             if name == '769':
-                event_id_renamed['left_hand'] = code
+                event_mapping[code] = fixed_event_id['left_hand']
             elif name == '770':
-                event_id_renamed['right_hand'] = code
+                event_mapping[code] = fixed_event_id['right_hand']
             elif name == '771':
-                event_id_renamed['feet'] = code
+                event_mapping[code] = fixed_event_id['feet']
             elif name == '772':
-                event_id_renamed['tongue'] = code
+                event_mapping[code] = fixed_event_id['tongue']
 
-        if len(event_id_renamed) > 0:
-            # Create epochs: tmin/tmax are relative to cue onset
+        if len(event_mapping) > 0:
+            
+            # 1. Identify which raw codes correspond to MI classes
+            valid_raw_codes = list(event_mapping.keys())
+            
+            # 2. Keep ONLY those events
+            mask_valid = np.isin(events[:, 2], valid_raw_codes)
+            events_mi_only = events[mask_valid].copy()
+            
+            # 3. Now it is safe to remap codes
+            for old_code, new_code in event_mapping.items():
+                events_mi_only[events_mi_only[:, 2] == old_code, 2] = new_code
+
+            if len(events_mi_only) == 0:
+                continue
+
+            if verbose:
+                print(f"  {run_name}: {len(events_mi_only)} MI events")
+
+            # Create epochs with fixed event_id
             epochs = mne.Epochs(
                 raw,
-                events,
-                event_id=event_id_renamed,
+                events_mi_only,
+                event_id=fixed_event_id,
                 tmin=tmin,
                 tmax=tmax,
                 baseline=baseline,
                 preload=True,
-                verbose=False
+                verbose=False,
+                event_repeated='drop'  # Handle any remaining duplicate timestamps
             )
             all_epochs.append(epochs)
 
@@ -212,6 +332,10 @@ def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verb
 
         if verbose:
             print(f"Total epochs extracted: {len(epochs_combined)}")
+            # Print class distribution
+            for class_name, class_code in fixed_event_id.items():
+                count = np.sum(epochs_combined.events[:, 2] == class_code)
+                print(f"  {class_name}: {count}")
 
         return epochs_combined
     else:
@@ -221,22 +345,6 @@ def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verb
 def filter_binary_classes(epochs, reject_artifacts=True, verbose=False):
     """
     Filters epochs to keep only left_hand and right_hand classes.
-
-    Parameters
-    ----------
-    epochs : mne.Epochs or None
-        Epochs containing all MI classes.
-    reject_artifacts : bool
-        Exclude trials marked as artifacts.
-    verbose : bool
-        Print class distribution info.
-
-    Returns
-    -------
-    X : ndarray, shape (n_trials, n_channels, n_times) or None
-        Epoch data array.
-    y : ndarray, shape (n_trials,) or None
-        Binary labels (0=left_hand, 1=right_hand).
     """
     if epochs is None:
         return None, None
@@ -271,45 +379,15 @@ def filter_binary_classes(epochs, reject_artifacts=True, verbose=False):
 
 def load_session_binary_mi(filepath, eeg_channels, eog_channels,
                            tmin=0.5, tmax=2.5, l_freq=8, h_freq=30,
-                           reject_artifacts=True, verbose=False):
+                           reject_artifacts=True, true_labels_path=None, verbose=False):
     """
     Complete pipeline to load a session and extract binary MI data.
-
-    Parameters
-    ----------
-    filepath : str
-        Path to GDF file.
-    eeg_channels : list of str
-        EEG channel names.
-    eog_channels : list of str
-        EOG channel names.
-    tmin : float
-        Epoch start time relative to cue onset in seconds.
-    tmax : float
-        Epoch end time relative to cue onset in seconds.
-    l_freq : float
-        Bandpass lowcut frequency in Hz.
-    h_freq : float
-        Bandpass highcut frequency in Hz.
-    reject_artifacts : bool
-        Exclude artifact trials.
-    verbose : bool
-        Print pipeline progress.
-
-    Returns
-    -------
-    X : ndarray, shape (n_trials, n_channels, n_times)
-        Epoch data for binary classification.
-    y : ndarray, shape (n_trials,)
-        Binary labels (0=left_hand, 1=right_hand).
-    epochs : mne.Epochs
-        Full epochs object for further analysis.
     """
     if verbose:
         print(f"Loading session: {filepath}")
 
     # 1. Organize into blocks
-    blocks = organize_session_by_blocks(filepath, verbose=verbose)
+    blocks = organize_session_by_blocks(filepath, true_labels_path=true_labels_path, verbose=verbose)
 
     # 2. Preprocess (EOG regression + bandpass filter)
     clean_runs, coefficients = preprocess_blocks(
@@ -331,22 +409,6 @@ def load_session_binary_mi(filepath, eeg_channels, eog_channels,
 def filter_multiclass(epochs, reject_artifacts=True, verbose=False):
     """
     Filters epochs to keep all four MI classes.
-
-    Parameters
-    ----------
-    epochs : mne.Epochs or None
-        Epochs containing all MI classes.
-    reject_artifacts : bool
-        Exclude trials marked as artifacts.
-    verbose : bool
-        Print class distribution info.
-
-    Returns
-    -------
-    X : ndarray, shape (n_trials, n_channels, n_times) or None
-        Epoch data array.
-    y : ndarray, shape (n_trials,) or None
-        Multiclass labels (0=left_hand, 1=right_hand, 2=feet, 3=tongue).
     """
     if epochs is None:
         return None, None
@@ -385,45 +447,15 @@ def filter_multiclass(epochs, reject_artifacts=True, verbose=False):
 
 def load_session_multiclass_mi(filepath, eeg_channels, eog_channels,
                                tmin=0.5, tmax=2.5, l_freq=8, h_freq=30,
-                               reject_artifacts=True, verbose=False):
+                               reject_artifacts=True, true_labels_path=None, verbose=False):
     """
     Complete pipeline to load a session and extract 4-class MI data.
-
-    Parameters
-    ----------
-    filepath : str
-        Path to GDF file.
-    eeg_channels : list of str
-        EEG channel names.
-    eog_channels : list of str
-        EOG channel names.
-    tmin : float
-        Epoch start time relative to cue onset in seconds.
-    tmax : float
-        Epoch end time relative to cue onset in seconds.
-    l_freq : float
-        Bandpass lowcut frequency in Hz.
-    h_freq : float
-        Bandpass highcut frequency in Hz.
-    reject_artifacts : bool
-        Exclude artifact trials.
-    verbose : bool
-        Print pipeline progress.
-
-    Returns
-    -------
-    X : ndarray, shape (n_trials, n_channels, n_times)
-        Epoch data for 4-class classification.
-    y : ndarray, shape (n_trials,)
-        Multiclass labels (0=left_hand, 1=right_hand, 2=feet, 3=tongue).
-    epochs : mne.Epochs
-        Full epochs object for further analysis.
     """
     if verbose:
         print(f"Loading session: {filepath}")
 
     # 1. Organize into blocks
-    blocks = organize_session_by_blocks(filepath, verbose=verbose)
+    blocks = organize_session_by_blocks(filepath, true_labels_path=true_labels_path, verbose=verbose)
 
     # 2. Preprocess (EOG regression + bandpass filter)
     clean_runs, _ = preprocess_blocks(
