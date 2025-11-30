@@ -61,37 +61,26 @@ def SC(Gte, Yte, lda):
     
     return yt_predict, time 
 
-def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte, Yte):
+
+def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte):
     """
-    Supervised Recalibration (SR) - Transfer learning with labeled target data.
-        
-    Retrains CSP filters and LDA classifier using only recent labeled samples 
-    from the target domain, discarding source domain data.
-        
+    Standard with Recalibration (SR).
+    
+    Implements the sliding window approach (Ang et al.):
+    Maintains a fixed training size by replacing the oldest source samples 
+    with the newest target samples.
+    
     Parameters
     ----------
-    Data_S2 : ndarray
-        Available labeled data from the target domain (epochs).
-    Labels_S2 : ndarray
-        Corresponding labels for Data_S2.
+    Data_S2, Labels_S2 : ndarray
+        Full available target data (Calibration + History).
     re : int
-        Additional samples to use beyond the initial 20 samples.
-    Xtr : ndarray
-        Source domain training data (used temporarily then discarded).
-    Ytr : ndarray
-        Source domain training labels (used temporarily then discarded).
+        Current test trial index relative to calibration end.
+    Xtr, Ytr : ndarray
+        Original Source data.
     Xte : ndarray
-        Target domain test data.
-    Yte : ndarray
-        Target domain test labels (not used in prediction).
-        
-    Returns
-    -------
-    yt_predict : ndarray
-        Predicted labels for the target domain test data.
-    time : float
-        Execution time in seconds.
-    """
+        Current target test trial (raw).
+    """ 
 
     
     start = timeit.default_timer()
@@ -128,7 +117,7 @@ def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte, Yte):
     return yt_predict, time 
 
 
-def Backward_GroupLasso_Transport(Gtr_daot, Ytr_daot, regu_, Gtr, Ytr, Gval, Yval, Gte, lda, metric):
+def Backward_GroupLasso_Transport(G_source, regulizers, G_val, Y_val, G_te, lda, metric):
     """
     Backward Group Lasso Transport - Reverse adaptation with class regularization.
         
@@ -138,21 +127,15 @@ def Backward_GroupLasso_Transport(Gtr_daot, Ytr_daot, regu_, Gtr, Ytr, Gval, Yva
         
     Parameters
     ----------
-    Gtr_daot : ndarray
+    G_source : ndarray
         Source domain features (used as transport target).
-    Ytr_daot : ndarray
-        Source domain labels (not used in transport).
-    regu_ : tuple of float
+    regulizers : tuple of float
         Regularization parameters: (entropy regularization, class regularization).
-    Gtr : ndarray
-        Source domain training features (not used directly).
-    Ytr : ndarray
-        Source domain training labels (not used directly).
-    Gval : ndarray
+    G_val : ndarray
         Target domain validation features (source for reverse transport).
-    Yval : ndarray
+    Y_val : ndarray
         Target domain validation labels.
-    Gte : ndarray
+    G_te : ndarray
         Target domain test features to be transported back.
     lda : LinearDiscriminantAnalysis
         Pre-trained LDA classifier from the source domain.
@@ -170,11 +153,11 @@ def Backward_GroupLasso_Transport(Gtr_daot, Ytr_daot, regu_, Gtr, Ytr, Gval, Yva
     #time
     start = timeit.default_timer()
       
-    botda = ot.da.SinkhornL1l2Transport(metric=metric, reg_e=regu_[0], reg_cl=regu_[1])
-    botda.fit(Xs=Gval, ys=Yval, Xt=Gtr_daot)
+    botda = ot.da.SinkhornL1l2Transport(metric=metric, reg_e=regulizers[0], reg_cl=regulizers[1])
+    botda.fit(Xs=G_val, ys=Y_val, Xt=G_source)
     
     #transport testing samples
-    transp_Xt_backward=botda.transform(Xs=Gte)
+    transp_Xt_backward=botda.transform(Xs=G_te)
     
     # Compute accuracy without retraining    
     yt_predict = lda.predict(transp_Xt_backward)
