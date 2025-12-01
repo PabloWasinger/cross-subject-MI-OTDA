@@ -735,4 +735,102 @@ def cv_grouplasso_backward_distance(reg_e_grid, reg_cl_grid, X_source, y_source,
     return xs_subset, ys_subset, reg_best
 
 
+def cv_all_methods(reg_e_grid, reg_cl_grid, X_source, y_source, X_target, y_target,
+                   clf, metric='sqeuclidean', outerkfold=20, innerkfold=None, M=40,
+                   norm=None, verbose=False):
+    """
+    Perform cross-validation for all transfer learning methods and return optimal parameters and subsamples.
+
+    Parameters
+    ----------
+    reg_e_grid : list
+        Entropic regularization grid.
+    reg_cl_grid : list
+        Group-lasso regularization grid.
+    X_source : ndarray
+        Source domain data.
+    y_source : ndarray
+        Source domain labels.
+    X_target : ndarray
+        Target domain data.
+    y_target : ndarray
+        Target domain labels.
+    clf : sklearn classifier
+        Classifier already trained on source.
+    metric : str
+        Distance metric.
+    outerkfold : int
+        Number of outer CV folds.
+    innerkfold : int or None
+        Number of inner CV folds for hyperparameter search.
+    M : int
+        Number of samples for subset.
+    norm : str or None
+        Cost matrix normalization.
+    verbose : bool
+        Print progress.
+
+    Returns
+    -------
+    subsamples : dict
+        Dictionary with selected subsamples for each method (keys: X and y for each method).
+    reg_params : dict
+        Dictionary with optimal regularization parameters for each method.
+    """
+
+    if verbose:
+        print("Running Forward Sinkhorn CV...")
+    X_fs, y_fs, reg_fs = cv_sinkhorn(
+        reg_e_grid, X_source, y_source, X_target, y_target, clf,
+        metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+        M=M, norm=norm, verbose=verbose
+    )
+
+    if verbose:
+        print("Running Forward GroupLasso CV...")
+    X_fg, y_fg, reg_fg = cv_grouplasso(
+        reg_e_grid, reg_cl_grid, X_source, y_source, X_target, y_target, clf,
+        metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+        M=M, norm=norm, verbose=verbose
+    )
+
+    if verbose:
+        print("Running Backward Sinkhorn CV...")
+    X_bs, y_bs, reg_bs = cv_sinkhorn_backward(
+        reg_e_grid, X_source, y_source, X_target, y_target, clf,
+        metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+        M=M, norm=norm, verbose=verbose
+    )
+
+    if verbose:
+        print("Running Backward GroupLasso CV...")
+    X_bg, y_bg, reg_bg = cv_grouplasso_backward(
+        reg_e_grid, reg_cl_grid, X_source, y_source, X_target, y_target, clf,
+        metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+        M=M, norm=norm, verbose=verbose
+    )
+
+    X_subsamples = {
+        'forward_sinkhorn': X_fs,
+        'forward_grouplasso': X_fg,
+        'backward_sinkhorn': X_bs,
+        'backward_grouplasso': X_bg
+    }
+
+    y_subsamples = {
+        'forward_sinkhorn': y_fs,
+        'forward_grouplasso': y_fg,
+        'backward_sinkhorn': y_bs,
+        'backward_grouplasso': y_bg
+    }
+
+    reg_params = {
+        'forward_sinkhorn': reg_fs,
+        'forward_grouplasso': reg_fg,
+        'backward_sinkhorn': reg_bs,
+        'backward_grouplasso': reg_bg
+    }
+
+    return X_subsamples, y_subsamples, reg_params
+
 

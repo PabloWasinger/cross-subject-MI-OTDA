@@ -12,12 +12,11 @@ np.random.seed(100)
 
 # from MIOTDAfunctions import*
 
-# get the functions from RPA package
-import rpa.transfer_learning as TL
-
+# pyRiemann transfer learning
 from pyriemann.classification import MDM
 from pyriemann.estimation import Covariances
 from pyriemann.utils.base import invsqrtm
+from pyriemann.transfer import TLCenter, TLRotate, TLScale, encode_domains
 import timeit
 
 #ignore warning 
@@ -28,7 +27,7 @@ simplefilter(action='ignore', category=FutureWarning)
 simplefilter(action='ignore', category=UserWarning)
 
 
-def SC(Gte, Yte, lda):
+def SC(G_te, lda):
     """
     Source Classifier (SC) - No transfer learning approach.
         
@@ -37,10 +36,8 @@ def SC(Gte, Yte, lda):
         
     Parameters
     ----------
-    Gte : ndarray
+    G_te : ndarray
         Test features from the target domain after CSP transformation.
-    Yte : ndarray
-        Test labels from the target domain (not used in prediction).
     lda : LinearDiscriminantAnalysis
         Pre-trained LDA classifier from the source domain.
         
@@ -54,7 +51,7 @@ def SC(Gte, Yte, lda):
     
     start = timeit.default_timer()
     
-    yt_predict = lda.predict(Gte)
+    yt_predict = lda.predict(G_te)
     
     stop = timeit.default_timer()
     time = stop - start
@@ -86,8 +83,8 @@ def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte):
     start = timeit.default_timer()
     
     #Get Data
-    Xtr2add = Data_S2[0:20 +re]
-    Ytr2add = Labels_S2[0:20 +re]
+    Xtr2add = Data_S2[0:20 +re - 1] # Corrected the leakage by subtracting 1
+    Ytr2add = Labels_S2[0:20 +re - 1]
     
     Xtr2 = np.vstack(((Xtr, Xtr2add)))
     Ytr2 = np.hstack(((Ytr, Ytr2add)))
@@ -115,6 +112,172 @@ def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte):
     time = stop - start
     
     return yt_predict, time 
+
+
+def Forward_Sinkhorn_Transport(G_subsample, regulizers, G_source, Y_source, G_val, G_te, clf, metric):
+    """
+    Sinkhorn Optimal Transport - Forward adaptation of source features.
+        
+    Learns an optimal transport mapping from source to target domain using 
+    Sinkhorn regularization, then applies this mapping to transform source 
+    features before retraining the classifier.
+        
+    Parameters
+    ----------
+    G_subsample : ndarray
+        Source domain features for learning the transport map.
+    regulizers : tuple of float
+        Regularization parameter (entropy) for Sinkhorn algorithm.
+    G_source : ndarray
+        Source domain training features to be transported.
+    Y_source : ndarray
+        Source domain training labels.
+    G_val : ndarray
+        Target domain validation features (unlabeled, used as transport target).
+    G_te : ndarray
+        Target domain test features.
+    clf : classifier object
+        Classifier (e.g., LDA) to be trained on transported features.
+    metric : str
+        Distance metric for optimal transport (e.g., 'sqeuclidean').
+        
+    Returns
+    -------
+    yt_predict : ndarray
+        Predicted labels for the target domain test data.
+    time : float
+        Execution time in seconds.
+    """
+
+
+    #time
+    start = timeit.default_timer()
+        
+    otda = ot.da.SinkhornTransport(metric=metric, reg_e=regulizers)
+    #learn the map
+    otda.fit(Xs=G_subsample, Xt=G_val)
+    
+    #apply the mapping over source data
+    transp_Xs = otda.transform(Xs=G_source)
+
+    # train a new classifier bases upon the transform source data
+    clf.fit(transp_Xs, Y_source)
+    
+    # Compute acc
+    yt_predict = clf.predict(G_te)
+    
+    # time
+    stop = timeit.default_timer()
+    time = stop - start  
+    
+    return yt_predict, time
+    
+
+def Forward_GroupLasso_Transport(G_subsample, Y_subsample, regulizers, G_source, Y_source, G_val, G_te, clf, metric):
+    """
+    Group Lasso Optimal Transport - Forward adaptation with class regularization.
+        
+    Similar to Sinkhorn transport but uses additional group lasso regularization 
+    to encourage class-wise transport structure, promoting within-class alignment.
+        
+    Parameters
+    ----------
+    G_subsample : ndarray
+        Source domain features for learning the transport map.
+    Y_subsample : ndarray
+        Source domain labels for learning the transport map.
+    regulizers : tuple of float
+        Regularization parameters: (entropy regularization, class regularization).
+    G_source : ndarray
+        Source domain training features to be transported.
+    Y_source : ndarray
+        Source domain training labels.
+    G_val : ndarray
+        Target domain validation features (unlabeled, used as transport target).
+    G_te : ndarray
+        Target domain test features.
+    clf : classifier object
+        Classifier (e.g., LDA) to be trained on transported features.
+    metric : str
+        Distance metric for optimal transport (e.g., 'sqeuclidean').
+        
+    Returns
+    -------
+    yt_predict : ndarray
+        Predicted labels for the target domain test data.
+    time : float
+        Execution time in seconds.
+    """
+    #time
+    start = timeit.default_timer()
+    
+        
+    otda = ot.da.SinkhornL1l2Transport(metric = metric, reg_e = regulizers[0], reg_cl = regulizers[1])
+    otda.fit(Xs=G_subsample, ys=Y_subsample, Xt=G_val)
+
+    #transport taget samples onto source samples
+    transp_Xs = otda.transform(Xs=G_source)
+
+    # train a new classifier bases upon the transform source data
+    clf.fit(transp_Xs, Y_source)
+
+    # Compute acc
+    yt_predict = clf.predict(G_te)   
+    # time
+    stop = timeit.default_timer()
+    time = stop - start 
+        
+    
+    return yt_predict, time
+
+def Backward_Sinkhorn_Transport(G_source, regulizers, G_val, G_te, lda, metric):
+    """ 
+    Backward Sinkhorn Transport - Reverse adaptation of test features.
+        
+    Learns a reverse transport map from target to source domain, then transports 
+    test features back to the source domain where the original classifier was trained.
+    No classifier retraining is performed.
+        
+    Parameters
+    ----------
+    Gtr_daot : ndarray
+        Source domain features (used as transport target).
+    regulizers : tuple of float
+        Regularization parameters: (entropy regularization).
+    G_val : ndarray
+        Target domain validation features (source for reverse transport).
+    G_te : ndarray
+        Target domain test features to be transported back.
+    lda : LinearDiscriminantAnalysis
+        Pre-trained LDA classifier from the source domain.
+    metric : str
+        Distance metric for optimal transport (e.g., 'sqeuclidean').
+        
+    Returns
+    -------
+    yt_predict : ndarray
+        Predicted labels for the target domain test data.
+    time : float
+        Execution time in seconds.
+    """
+    # time
+    start = timeit.default_timer()
+      
+    # Transport plan
+    botda = ot.da.SinkhornTransport(metric=metric, reg_e=regulizers)
+    botda.fit(Xs=G_val, Xt=G_source)
+    
+    #transport testing samples
+    transp_Xt_backward = botda.transform(Xs=G_te)
+    
+    # Compute accuracy without retraining    
+    yt_predict = lda.predict(transp_Xt_backward)
+    
+    # time
+    stop = timeit.default_timer()
+    time = stop - start
+    
+    return yt_predict, time
 
 
 def Backward_GroupLasso_Transport(G_source, regulizers, G_val, Y_val, G_te, lda, metric):
@@ -173,11 +336,11 @@ def Backward_GroupLasso_Transport(G_source, regulizers, G_val, Y_val, G_te, lda,
 def RPA(Xtr, Xval, Xte, Ytr, Yval, Yte):
     """
     Riemannian Procrustes Analysis (RPA) - Manifold-based domain adaptation.
-        
-    Performs domain adaptation on covariance matrices by sequential geometric 
-    transformations: recentering, stretching, and rotation on the Riemannian 
+
+    Performs domain adaptation on covariance matrices by sequential geometric
+    transformations: recentering, scaling, and rotation on the Riemannian
     manifold of SPD matrices. Combines adapted source and target data for training.
-        
+
     Parameters
     ----------
     Xtr : ndarray
@@ -192,7 +355,7 @@ def RPA(Xtr, Xval, Xte, Ytr, Yval, Yte):
         Target domain validation labels.
     Yte : ndarray
         Target domain test labels (not used in prediction).
-        
+
     Returns
     -------
     yt_predict : ndarray
@@ -203,44 +366,61 @@ def RPA(Xtr, Xval, Xte, Ytr, Yval, Yte):
 
     # time
     start = timeit.default_timer()
-    # cov matrix estimation
+
+    # Estimate covariance matrices
     cov_tr = Covariances().transform(Xtr)
-    cov_val= Covariances().transform(Xval)
+    cov_val = Covariances().transform(Xval)
     cov_te = Covariances().transform(Xte)
-        
-    clf = MDM()
-    source={'covs':cov_tr, 'labels': Ytr}
-    target_org_train={'covs':cov_val, 'labels': Yval}
-    target_org_test={'covs':cov_te, 'labels': Yte}
-    
-    # re-centered matrices
-    source_rct, target_rct_train, target_rct_test = TL.RPA_recenter(source, target_org_train, target_org_test)   
-    # stretched the re-centered matrices
-    source_rcs, target_rcs_train, target_rcs_test = TL.RPA_stretch(source_rct, target_rct_train, target_rct_test)
-    # rotate the re-centered-stretched matrices using information from classes
-    source_rpa, target_rpa_train, target_rpa_test = TL.RPA_rotate(source_rcs, target_rcs_train, target_rcs_test)
-    
-    # get data
-    covs_source, y_source = source_rpa['covs'], source_rpa['labels']
-    covs_target_train, y_target_train = target_rpa_train['covs'], target_rpa_train['labels']
-    covs_target_test, y_target_test = target_rpa_test['covs'], target_rpa_test['labels']
-    
-    # append train and validation data
+
+    # Combine all covariance matrices for transformation
+    X_combined = np.concatenate([cov_tr, cov_val, cov_te])
+
+    # Encode domains using extended labels
+    # Domain encoding: 0 for source (train), 1 for target_train (val), 2 for target_test
+    n_tr, n_val, n_te = len(cov_tr), len(cov_val), len(cov_te)
+
+    # Create extended labels: [label, domain]
+    y_tr_enc = encode_domains(X_combined[:n_tr], Ytr, domain='source')
+    y_val_enc = encode_domains(X_combined[n_tr:n_tr+n_val], Yval, domain='target')
+    y_te_enc = encode_domains(X_combined[n_tr+n_val:], Yte, domain='target')
+
+    # Combine all data
+    X_all = X_combined
+    y_all_enc = np.concatenate([y_tr_enc, y_val_enc, y_te_enc])
+
+    # Apply RPA transformations in sequence
+    # 1. Recenter
+    rct = TLCenter(target_domain='target')
+    X_rct = rct.fit_transform(X_all, y_all_enc)
+
+    # 2. Scale (stretch)
+    scl = TLScale(target_domain='target')
+    X_scl = scl.fit_transform(X_rct, y_all_enc)
+
+    # 3. Rotate
+    rot = TLRotate(target_domain='target', metric='riemann')
+    X_rpa = rot.fit_transform(X_scl, y_all_enc)
+
+    # Split back into source, target_train, target_test
+    covs_source = X_rpa[:n_tr]
+    covs_target_train = X_rpa[n_tr:n_tr+n_val]
+    covs_target_test = X_rpa[n_tr+n_val:]
+
+    # Combine source and target training data
     covs_train = np.concatenate([covs_source, covs_target_train])
-    y_train = np.concatenate([y_source, y_target_train])
-    
-    # train
+    y_train = np.concatenate([Ytr, Yval])
+
+    # Train MDM classifier
+    clf = MDM()
     clf.fit(covs_train, y_train)
-    
-    # test
-    covs_test = covs_target_test
-    y_test = y_target_test
-    yt_predict = clf.predict(covs_test)
-    
+
+    # Predict on test data
+    yt_predict = clf.predict(covs_target_test)
+
     # time
     stop = timeit.default_timer()
     time = stop - start
-    
+
     return yt_predict, time
 
 def EU(Xtr,Xval,Xte,Ytr,Yval,Yte):

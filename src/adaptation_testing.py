@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd    
-from transfer_learning import*
+from transfer_learning_methods import*
 from validation import*
 
 # rango_cl=[0.1, 1, 10]
@@ -12,7 +12,7 @@ from validation import*
 # norm=None
 
 
-def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_calib=20, verbose=True):
+def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_params, n_calib=20,  verbose=True):
     """
     Evaluate transfer learning methods with incremental trial-by-trial calibration using optimized hyperparameters.
 
@@ -26,6 +26,9 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
         Target domain EEG data, shape (n_trials, n_channels, n_samples).
     y_target : ndarray
         Target domain labels, shape (n_trials,).
+    cv_params : dict
+        Dictionary with cross-validation parameters.
+        Expected keys: 'reg_e_grid', 'reg_cl_grid', 'metric', 'outerkfold', 'innerkfold', 'M', 'norm'.
     n_calib : int, optional
         Number of calibration trials from target domain. Default is 20.
     verbose : bool, optional
@@ -61,16 +64,15 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
 
 
     # Hyperparameter Optimization
-    reg_e_grid = [0.1, 1, 10]
-    reg_cl_grid = [0.1, 1, 10]
-    metric = 'sqeuclidean'
-    outerkfold = 20
-    innerkfold = 3 
-    M=40 # Number of samples to transport
-    norm=None
+    reg_e_grid = cv_params['reg_e_grid']
+    reg_cl_grid = cv_params['reg_cl_grid']
+    metric = cv_params['metric']
+    outerkfold = cv_params['outerkfold']
+    innerkfold = cv_params['innerkfold']
+    M=cv_params['M'] # Number of samples to transport
+    norm=cv_params['norm']    
 
-    # BOTDAGL optimal parameters
-    G_subsample, y_subsample, reg_params = cv_grouplasso_backward(
+    G_subsamples, y_subsamples, reg_params = cv_all_methods(
         reg_e_grid, reg_cl_grid, G_source, y_source, G_val, y_val, clf_base,
         metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
         M=M, norm=norm, verbose=verbose
@@ -80,6 +82,9 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
     predictions ={
                 'SC': [],
                 'SR': [],
+                'Forward_Sinkhorn': [],
+                'Forward_GroupLasso': [],
+                'Backward_Sinkhorn': [],
                 'Backward_GroupLasso': [],
                 'RPA': [],
                 'EU': []
@@ -88,6 +93,9 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
     times ={
                 'SC': [],
                 'SR': [],
+                'Forward_Sinkhorn': [],
+                'Forward_GroupLasso': [],
+                'Backward_Sinkhorn': [],
                 'Backward_GroupLasso': [],
                 'RPA': [],
                 'EU': []
@@ -111,7 +119,7 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
         G_val=np.vstack((G_val, G_test))
             
         # SC  
-        yt_predict, time_sc = SC(G_test, y_test_trial, clf_base)
+        yt_predict, time_sc = SC(G_test, clf_base)
         predictions['SC'].append(yt_predict)
         times['SC'].append(time_sc)
 
@@ -121,8 +129,24 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
         predictions['SR'].append(yt_predict)
         times['SR'].append(time_sr)
 
+        # Forward Sinkhorn Transport
+        yt_predict, time_fs = Forward_Sinkhorn_Transport(G_subsamples["forward_sinkhorn"], reg_params["forward_sinkhorn"], G_source, y_source, G_val, G_test, clf_base, metric)
+        predictions['Forward_Sinkhorn'].append(yt_predict)
+        times['Forward_Sinkhorn'].append(time_fs)
+
+        # Forward Group-Lasso Transport
+        yt_predict, time_fg = Forward_GroupLasso_Transport(G_subsamples["forward_grouplasso"], y_subsamples["forward_grouplasso"], reg_params["forward_grouplasso"], G_source, y_source, G_val, G_test, clf_base, metric)
+        predictions['Forward_GroupLasso'].append(yt_predict)
+        times['Forward_GroupLasso'].append(time_fg)
+
+        # Backward Sinkhorn Transport
+        yt_predict, time_bs = Backward_Sinkhorn_Transport(G_subsamples["backward_sinkhorn"], reg_params["backward_sinkhorn"], G_val, G_test, clf_base, metric)
+        predictions['Backward_Sinkhorn'].append(yt_predict)
+        times['Backward_Sinkhorn'].append(time_bs)
+
+
         # Backward Group-Lasso Transport
-        yt_predict, time_bg = Backward_GroupLasso_Transport(G_subsample, reg_params, G_val, y_val, G_test, clf_base, metric)
+        yt_predict, time_bg = Backward_GroupLasso_Transport(G_subsamples["backward_grouplasso"], reg_params["backward_grouplasso"], G_val, y_val, G_test, clf_base, metric)
         predictions['Backward_GroupLasso'].append(yt_predict)
         times['Backward_GroupLasso'].append(time_bg)
 
@@ -136,16 +160,9 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, n_cal
         predictions['EU'].append(yt_predict)
         times['EU'].append(time_eu)
 
-        times_trial = [time_sc, time_sr, time_rpa, time_eu, time_bg]
-    
-        if re == 1:
-            times_se = times_trial
-        else:
-            times_se = np.vstack((times_se, times_trial))
-            
         
-        
-    return predictions, times, times_se
+
+    return predictions, times
 
 
 def calculate_accuracies(predictions, Y_test, print_results=True):
