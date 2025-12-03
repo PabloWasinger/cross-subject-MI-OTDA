@@ -11,12 +11,15 @@ For each subject (excluding subject 4):
 import sys
 from pathlib import Path
 
-
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent / 'src'))
 
 import numpy as np
 import pandas as pd
 from structuredata import load_session_binary_mi
 from adaptation_testing import evaluate_tl_methods_samplewise, calculate_accuracies
+import warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning)
 
 # Dataset configuration
 DATA_DIR = Path("data")
@@ -26,20 +29,26 @@ RESULTS_DIR = Path("results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
 # EEG channel configuration for BNCI2014_001
-EEG_CHANNELS = [f'EEG-{i}' for i in range(22)]  # 22 EEG channels
+EEG_CHANNELS = [
+      'EEG-Fz', 'EEG-0', 'EEG-1', 'EEG-2', 'EEG-3', 'EEG-4', 'EEG-5',
+      'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7', 'EEG-C4', 'EEG-8', 'EEG-9',
+      'EEG-10', 'EEG-11', 'EEG-12', 'EEG-13', 'EEG-14', 'EEG-Pz',
+      'EEG-15', 'EEG-16'
+  ]  # 22 EEG channels
 EOG_CHANNELS = ['EOG-left', 'EOG-central', 'EOG-right']
 
 # Subjects to process (excluding subject 4)
 SUBJECTS = [1, 2, 3, 5, 6, 7, 8, 9]
 
 # Cross-validation parameters
+N_CALIB = 24
 CV_PARAMS = {
-    'reg_e_grid': [0.01,0.1, 0.5, 1, 2, 5, 10, 20],
-    'reg_cl_grid': [0.01,0.1, 0.5, 1, 2, 5, 10, 20],
+    'reg_e_grid': [0.1, 0.5, 1, 2, 5, 10, 20],
+    'reg_cl_grid': [0.1, 0.5, 1, 2, 5, 10, 20],
     'metric': 'sqeuclidean',
     'outerkfold': 20,
-    'innerkfold': None,
-    'M': 20,
+    'innerkfold': None, 
+    'M': N_CALIB,
     'norm': None
 }
 
@@ -165,19 +174,18 @@ def main():
 
             # Run evaluation
             print("\nRunning transfer learning evaluation...")
-            n_calib = 24
             predictions, times = evaluate_tl_methods_samplewise(
                 X_source=X_train,
                 y_source=y_train,
                 X_target=X_test,
                 y_target=y_test,
                 cv_params=CV_PARAMS,
-                n_calib=n_calib,
+                n_calib=N_CALIB,
                 verbose=True
             )
 
             # Extract test labels (only the trials that were actually predicted)
-            y_test_predicted = y_test[n_calib:]
+            y_test_predicted = y_test[N_CALIB:]
 
             # Save results
             save_results(subject_id, predictions, times, y_test_predicted)

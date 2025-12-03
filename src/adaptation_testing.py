@@ -102,7 +102,7 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_pa
     }
 
     for re in range(1,len(y_test)+1):
-        if np.mod(re,10)==0 : print('Running testing trial={:1.0f}'.format(re))
+        if np.mod(re,10)==1 : print('Running testing trial={:1.0f}'.format(re))
 
         #testing trial
         X_test_trial=X_test_raw[(re-1):(re)]
@@ -125,37 +125,51 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_pa
 
         
         # SR
+        if np.mod(re,10)==1 :
+            print(f"Running SR for trial {re}")
         yt_predict, time_sr = SR(X_target, y_target, re, X_source, y_source, X_test_trial)
         predictions['SR'].append(yt_predict)
         times['SR'].append(time_sr)
 
         # Forward Sinkhorn Transport
+        if np.mod(re,10)==1 :
+            print(f"Running Forward Sinkhorn Transport for trial {re}")
         yt_predict, time_fs = Forward_Sinkhorn_Transport(G_subsamples["forward_sinkhorn"], reg_params["forward_sinkhorn"], G_source, y_source, G_val, G_test, clf_base, metric)
         predictions['Forward_Sinkhorn'].append(yt_predict)
         times['Forward_Sinkhorn'].append(time_fs)
 
         # Forward Group-Lasso Transport
+        if np.mod(re,10)==1 :
+            print(f"Running Forward Group-Lasso Transport for trial {re}")
         yt_predict, time_fg = Forward_GroupLasso_Transport(G_subsamples["forward_grouplasso"], y_subsamples["forward_grouplasso"], reg_params["forward_grouplasso"], G_source, y_source, G_val, G_test, clf_base, metric)
         predictions['Forward_GroupLasso'].append(yt_predict)
         times['Forward_GroupLasso'].append(time_fg)
 
         # Backward Sinkhorn Transport
+        if np.mod(re,10)==1 :
+            print(f"Running Backward Sinkhorn Transport for trial {re}")
         yt_predict, time_bs = Backward_Sinkhorn_Transport(G_subsamples["backward_sinkhorn"], reg_params["backward_sinkhorn"], G_val, G_test, clf_base, metric)
         predictions['Backward_Sinkhorn'].append(yt_predict)
         times['Backward_Sinkhorn'].append(time_bs)
 
 
         # Backward Group-Lasso Transport
+        if np.mod(re,10)==1 :
+            print(f"Running Backward Group-Lasso Transport for trial {re}")
         yt_predict, time_bg = Backward_GroupLasso_Transport(G_subsamples["backward_grouplasso"], reg_params["backward_grouplasso"], G_val, y_val, G_test, clf_base, metric)
         predictions['Backward_GroupLasso'].append(yt_predict)
         times['Backward_GroupLasso'].append(time_bg)
 
         # Riemann
+        if np.mod(re,10)==1 :
+            print(f"Running Riemann for trial {re}")
         yt_predict, time_rpa = RPA(X_source, X_val_raw, X_test_trial, y_source, y_val, y_test_trial)
         predictions['RPA'].append(yt_predict)
         times['RPA'].append(time_rpa)
 
         # Euclidean
+        if np.mod(re,10)==1 :
+            print(f"Running Euclidean for trial {re}")
         yt_predict, time_eu = EU(X_source,X_val_raw,X_test_trial,y_source,y_val,y_test_trial)
         predictions['EU'].append(yt_predict)
         times['EU'].append(time_eu)
