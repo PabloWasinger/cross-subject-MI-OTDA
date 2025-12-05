@@ -78,7 +78,7 @@ def SC(G_te, lda):
     return yt_predict, time 
 
 
-def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte):
+def SR(Data_S2, Labels_S2, n_calib, Xtr, Ytr, Xte):
     """
     Standard with Recalibration (SR).
     
@@ -90,8 +90,8 @@ def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte):
     ----------
     Data_S2, Labels_S2 : ndarray
         Full available target data (Calibration + History).
-    re : int
-        Current test trial index relative to calibration end.
+    n_calib : int
+        Number of target trials to use for calibration (all trials from 0 to n_calib).
     Xtr, Ytr : ndarray
         Original Source data.
     Xte : ndarray
@@ -102,8 +102,8 @@ def SR(Data_S2, Labels_S2, re, Xtr, Ytr, Xte):
     start = timeit.default_timer()
     
     #Get Data
-    Xtr2add = Data_S2[0:20 +re] 
-    Ytr2add = Labels_S2[0:20 +re]
+    Xtr2add = Data_S2[0:n_calib] 
+    Ytr2add = Labels_S2[0:n_calib]
     
     Xtr2 = np.vstack(((Xtr, Xtr2add)))
     Ytr2 = np.hstack(((Ytr, Ytr2add)))
@@ -370,61 +370,77 @@ def Backward_GroupLasso_Transport(G_source, regulizers, G_val, Y_val, G_te, lda,
     return yt_predict, time
 
 
-def RPA(Xtr, Xval, Xte, Ytr, Yval, Yte):
+def RPA(Xtr, Xval, Xte, Ytr, Yval, Yte, transductive=False):
     """
-    RPA con Codificación Manual de Dominios (Bypass de pyriemann).
+    RPA (Riemannian Procrustes Analysis).
+    
+    Parameters
+    ----------
+    transductive : bool
+        If True, fit transforms on all data including test (samplewise).
+        If False, fit on train only and transform test separately (blockwise).
     """
     start = timeit.default_timer()
 
-    # --- 1. Asegurar Contigüidad y Flatten ---
     Xtr = np.array(Xtr).copy()
     Xval = np.array(Xval).copy()
     Xte = np.array(Xte).copy()
     
-    # Flatten y asegurar enteros para las etiquetas
     Ytr = np.asarray(Ytr).flatten().astype(int)
     Yval = np.asarray(Yval).flatten().astype(int)
     Yte = np.asarray(Yte).flatten().astype(int)
 
-    # --- 2. Normalización de Dimensiones ---
     if Xtr.ndim == 2: Xtr = Xtr[np.newaxis, ...]
     if Xval.ndim == 2: Xval = Xval[np.newaxis, ...]
     if Xte.ndim == 2: Xte = Xte[np.newaxis, ...]
 
-    # --- 3. Cálculo de Covarianzas ---
     cov_est = Covariances(estimator='oas') 
     cov_tr = cov_est.transform(Xtr)
     cov_val = cov_est.transform(Xval)
     cov_te = cov_est.transform(Xte)
 
-    # --- 4. MANUAL ENCODE DOMAINS ---
-    # Reemplazamos encode_domains() por una list comprehension directa.
-    # Formato esperado por pyriemann: "{dominio}/{etiqueta}"
     y_tr_enc = np.array([f"source/{y}" for y in Ytr])
     y_val_enc = np.array([f"target/{y}" for y in Yval])
     y_te_enc = np.array([f"target/{y}" for y in Yte])
 
-    # --- 5. Concatenar y Transformar ---
-    X_all = np.concatenate([cov_tr, cov_val, cov_te])
-    y_all_enc = np.concatenate([y_tr_enc, y_val_enc, y_te_enc])
-
-    # Aplicar RPA steps (Center -> Stretch -> Rotate)
-    rct = TLCenter(target_domain='target')
-    X_rct = rct.fit_transform(X_all, y_all_enc)
-
-    scl = TLStretch(target_domain='target')
-    X_scl = scl.fit_transform(X_rct, y_all_enc)
-
-    rot = TLRotate(target_domain='target', metric='riemann')
-    X_rpa = rot.fit_transform(X_scl, y_all_enc)
-
-    # --- 6. Split y Train ---
     n_tr = len(cov_tr)
     n_val = len(cov_val)
-    
-    covs_source = X_rpa[:n_tr]
-    covs_target_train = X_rpa[n_tr:n_tr+n_val]
-    covs_target_test = X_rpa[n_tr+n_val:]
+
+    if transductive:
+        X_all = np.concatenate([cov_tr, cov_val, cov_te])
+        y_all_enc = np.concatenate([y_tr_enc, y_val_enc, y_te_enc])
+
+        rct = TLCenter(target_domain='target')
+        X_rct = rct.fit_transform(X_all, y_all_enc)
+
+        scl = TLStretch(target_domain='target')
+        X_scl = scl.fit_transform(X_rct, y_all_enc)
+
+        rot = TLRotate(target_domain='target', metric='riemann')
+        X_rpa = rot.fit_transform(X_scl, y_all_enc)
+
+        covs_source = X_rpa[:n_tr]
+        covs_target_train = X_rpa[n_tr:n_tr+n_val]
+        covs_target_test = X_rpa[n_tr+n_val:]
+    else:
+        X_train = np.concatenate([cov_tr, cov_val])
+        y_train_enc = np.concatenate([y_tr_enc, y_val_enc])
+
+        rct = TLCenter(target_domain='target')
+        X_rct_train = rct.fit_transform(X_train, y_train_enc)
+        X_rct_te = rct.transform(cov_te)
+
+        scl = TLStretch(target_domain='target')
+        X_scl_train = scl.fit_transform(X_rct_train, y_train_enc)
+        X_scl_te = scl.transform(X_rct_te)
+
+        rot = TLRotate(target_domain='target', metric='riemann')
+        X_rpa_train = rot.fit_transform(X_scl_train, y_train_enc)
+        X_rpa_te = rot.transform(X_scl_te)
+
+        covs_source = X_rpa_train[:n_tr]
+        covs_target_train = X_rpa_train[n_tr:]
+        covs_target_test = X_rpa_te
 
     # Para entrenar el MDM usamos las etiquetas ORIGINALES (int), no las encoded
     covs_train = np.concatenate([covs_source, covs_target_train])

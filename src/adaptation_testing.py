@@ -11,6 +11,261 @@ from validation import*
 # M=20
 # norm=None
 
+def evaluate_tl_methods_blockwise(X_source, y_source, X_target, y_target, 
+                                   cv_params, trials_per_run=24, verbose=True):
+    """
+    Evaluate transfer learning methods with block-wise adaptation.
+    
+
+    - First run R0 (trials 0:trials_per_run) is used for calibration only
+    - For each subsequent run r, the transportation set Vr accumulates all prior data
+    - M (source subset size) equals the size of the transportation set
+    - Hyperparameters are re-optimized for each run
+    
+    Parameters
+    ----------
+    X_source : ndarray, shape (n_source_trials, n_channels, n_samples)
+        Source domain EEG data (e.g., calibration session).
+    y_source : ndarray, shape (n_source_trials,)
+        Source domain labels.
+    X_target : ndarray, shape (n_target_trials, n_channels, n_samples)
+        Target domain EEG data (e.g., evaluation session).
+    y_target : ndarray, shape (n_target_trials,)
+        Target domain labels.
+    cv_params : dict
+        Cross-validation parameters with keys:
+        - 'reg_e_grid': list of entropic regularization values
+        - 'reg_cl_grid': list of group-lasso regularization values  
+        - 'metric': distance metric (default 'sqeuclidean')
+        - 'outerkfold': number of outer CV folds for subset selection
+        - 'innerkfold': inner CV config dict or None
+        - 'norm': cost matrix normalization or None
+    trials_per_run : int, optional
+        Number of trials per run/block. Default is 24.
+    verbose : bool, optional
+        Print progress messages. Default is True.
+    
+    Returns
+    -------
+    results : dict
+        Dictionary with keys:
+        - 'accuracies': dict of method_name -> list of accuracies per run
+        - 'times': dict of method_name -> list of times per run
+        - 'run_indices': list of run numbers that were tested
+    
+    Notes
+    -----
+    Timing includes both hyperparameter optimization (CV) and adaptation/prediction,
+    which differs from Peterson's original timing that excluded CV time.
+    This provides a fairer comparison for practical online scenarios.
+    """
+    
+
+    # Train base model on source domain
+    csp = CSP(n_components=6, reg='empirical', log=True, norm_trace=False, cov_est='epoch')
+    G_source = csp.fit_transform(X_source, y_source)
+    
+    clf_base = LinearDiscriminantAnalysis()
+    clf_base.fit(G_source, y_source)
+    
+    # Determine run structure
+    n_target_trials = len(y_target)
+    n_runs = n_target_trials // trials_per_run
+    
+    if verbose:
+        print(f"Target session: {n_target_trials} trials -> {n_runs} runs of {trials_per_run} trials")
+        print(f"R0 (first {trials_per_run} trials) used for calibration only")
+        print(f"Testing runs: R1 to R{n_runs-1}")
+    
+    # Extract CV parameters
+    reg_e_grid = cv_params['reg_e_grid']
+    reg_cl_grid = cv_params['reg_cl_grid']
+    metric = cv_params.get('metric', 'sqeuclidean')
+    outerkfold = cv_params.get('outerkfold', 20)
+    innerkfold = cv_params.get('innerkfold', None)
+    norm = cv_params.get('norm', None)
+    
+    # Initialize results storage
+    methods = ['SC', 'SR', 'Forward_Sinkhorn', 'Forward_GroupLasso',
+               'Backward_Sinkhorn', 'Backward_GroupLasso', 'RPA', 'EU']
+    
+    predictions = {method: [] for method in methods}
+    accuracies = {method: [] for method in methods}
+    times = {method: [] for method in methods}
+    run_indices = []
+    
+    # Iterate over testing runs
+    for run_idx in range(1, n_runs):  # Start from run 1 (R0 is calibration)
+        if verbose:
+            print(f"Processing Run {run_idx} (testing trials {run_idx*trials_per_run}:{(run_idx+1)*trials_per_run})")
+        
+        run_indices.append(run_idx)
+        
+        # Define data splits for this run
+        
+        # Transportation set: all prior data (R0 through R_{run_idx-1})
+        val_end_idx = run_idx * trials_per_run
+        X_val_raw = X_target[:val_end_idx]
+        y_val = y_target[:val_end_idx]
+        
+        # Testing run data
+        test_start_idx = run_idx * trials_per_run
+        test_end_idx = (run_idx + 1) * trials_per_run
+        X_test_raw = X_target[test_start_idx:test_end_idx]
+        y_test = y_target[test_start_idx:test_end_idx]
+        
+        # Transform to CSP space
+        G_val = csp.transform(X_val_raw)
+        G_test = csp.transform(X_test_raw)
+        
+        M = min(len(y_val), len(y_source))
+        
+        if verbose:
+            print(f"Transportation set size (M): {M} trials")
+            print(f"Test set size: {len(y_test)} trials")
+        
+
+        # SC (Source Classifier - no adaptation)
+        y_pred_sc, time_sc = SC(G_test, clf_base)
+        acc_sc = accuracy_score(y_test, y_pred_sc)
+
+        predictions['SC'].append(y_pred_sc)
+        accuracies['SC'].append(acc_sc)
+        times['SC'].append(time_sc)
+
+        # SR (Standard Recalibration)
+        y_pred_sr, time_sr = SR(X_target, y_target, run_idx * trials_per_run, X_source, y_source, X_test_raw)
+        acc_sr = accuracy_score(y_test, y_pred_sr)
+
+        predictions['SR'].append(y_pred_sr)
+        accuracies['SR'].append(acc_sr)
+        times['SR'].append(time_sr)
+        
+
+        # Forward Sinkhorn Transport
+        start_time = timeit.default_timer()
+
+        # CV for subset selection and hyperparameter tuning
+        clf_forward = clone(clf_base)
+        G_fs, _, reg_fs = cv_sinkhorn(
+            reg_e_grid, G_source, y_source, G_val, y_val, clf_forward,
+            metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+            M=M, norm=norm, verbose=False
+        )
+
+        time_cv = timeit.default_timer() - start_time
+
+        # Apply transport 
+        y_pred_fs, time_transport = Forward_Sinkhorn_Transport(
+            G_fs, reg_fs, G_source, y_source, G_val, G_test, clf_base, metric
+        )
+        acc_fs = accuracy_score(y_test, y_pred_fs)
+
+        time_fs = time_cv + time_transport
+
+        predictions['Forward_Sinkhorn'].append(y_pred_fs)
+        accuracies['Forward_Sinkhorn'].append(acc_fs)
+        times['Forward_Sinkhorn'].append(time_fs)
+        
+        # Forward GroupLasso Transport
+        start_time = timeit.default_timer()
+
+        clf_forward_gl = clone(clf_base)
+        G_fg, y_fg, reg_fg = cv_grouplasso(
+            reg_e_grid, reg_cl_grid, G_source, y_source, G_val, y_val, clf_forward_gl,
+            metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+            M=M, norm=norm, verbose=False
+        )
+
+        time_cv = timeit.default_timer() - start_time
+
+        # Apply transport 
+        y_pred_fg, time_transport = Forward_GroupLasso_Transport(
+            G_fg, y_fg, reg_fg, G_source, y_source, G_val, G_test, clf_base, metric
+        )
+        acc_fg = accuracy_score(y_test, y_pred_fg)
+        time_fg = time_cv + time_transport
+
+        predictions['Forward_GroupLasso'].append(y_pred_fg)
+        accuracies['Forward_GroupLasso'].append(acc_fg)
+        times['Forward_GroupLasso'].append(time_fg)
+        
+        # Backward Sinkhorn Transport
+        start_time = timeit.default_timer()
+
+        # For backward methods, we use the ORIGINAL clf_base (never modified)
+        G_bs, _, reg_bs = cv_sinkhorn_backward(
+            reg_e_grid, G_source, y_source, G_val, y_val, clf_base,
+            metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+            M=M, norm=norm, verbose=False
+        )
+
+        time_cv = timeit.default_timer() - start_time
+
+        # Apply transport 
+        y_pred_bs, time_transport = Backward_Sinkhorn_Transport(
+            G_bs, reg_bs, G_val, G_test, clf_base, metric
+        )
+        acc_bs = accuracy_score(y_test, y_pred_bs)
+        time_bs = time_cv + time_transport
+
+        predictions['Backward_Sinkhorn'].append(y_pred_bs)
+        accuracies['Backward_Sinkhorn'].append(acc_bs)
+        times['Backward_Sinkhorn'].append(time_bs)
+        
+        # Backward GroupLasso Transport
+        start_time = timeit.default_timer()
+
+        G_bg, _, reg_bg = cv_grouplasso_backward(
+            reg_e_grid, reg_cl_grid, G_source, y_source, G_val, y_val, clf_base,
+            metric=metric, outerkfold=outerkfold, innerkfold=innerkfold,
+            M=M, norm=norm, verbose=False
+        )
+
+        time_cv = timeit.default_timer() - start_time
+
+        # Apply transport 
+        y_pred_bg, time_transport = Backward_GroupLasso_Transport(
+            G_bg, reg_bg, G_val, y_val, G_test, clf_base, metric
+        )
+        acc_bg = accuracy_score(y_test, y_pred_bg)
+        time_bg = time_cv + time_transport
+
+        predictions['Backward_GroupLasso'].append(y_pred_bg)
+        accuracies['Backward_GroupLasso'].append(acc_bg)
+        times['Backward_GroupLasso'].append(time_bg)
+        
+        # RPA (Riemannian Procrustes Analysis)
+        start_time = timeit.default_timer()
+        y_pred_rpa, _ = RPA(X_source, X_val_raw, X_test_raw, y_source, y_val, y_test, transductive=False)
+        acc_rpa = accuracy_score(y_test, y_pred_rpa)
+        time_rpa = timeit.default_timer() - start_time
+        
+        accuracies['RPA'].append(acc_rpa)
+        times['RPA'].append(time_rpa)
+        
+        # EU (Euclidean Alignment)
+        start_time = timeit.default_timer()
+        y_pred_eu, _ = EU(X_source, X_val_raw, X_test_raw, y_source, y_val, y_test)
+        acc_eu = accuracy_score(y_test, y_pred_eu)
+        time_eu = timeit.default_timer() - start_time
+        
+        accuracies['EU'].append(acc_eu)
+        times['EU'].append(time_eu)
+        
+        predictions['RPA'].append(y_pred_rpa)
+        predictions['EU'].append(y_pred_eu)
+    
+    results = {
+        'predictions': predictions,
+        'accuracies': accuracies,
+        'times': times,
+        'run_indices': run_indices
+    }
+    
+    return results
+
+
 
 def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_params, n_calib=20,  verbose=True):
     """
@@ -127,7 +382,7 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_pa
         # SR
         if np.mod(re,10)==1 :
             print(f"Running SR for trial {re}")
-        yt_predict, time_sr = SR(X_target, y_target, re, X_source, y_source, X_test_trial)
+        yt_predict, time_sr = SR(X_target, y_target, n_calib + (re - 1), X_source, y_source, X_test_trial)
         predictions['SR'].append(yt_predict)
         times['SR'].append(time_sr)
 
@@ -163,7 +418,7 @@ def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_pa
         # Riemann
         if np.mod(re,10)==1 :
             print(f"Running Riemann for trial {re}")
-        yt_predict, time_rpa = RPA(X_source, X_val_raw, X_test_trial, y_source, y_val, y_test_trial)
+        yt_predict, time_rpa = RPA(X_source, X_val_raw, X_test_trial, y_source, y_val, y_test_trial, transductive=True)
         predictions['RPA'].append(yt_predict)
         times['RPA'].append(time_rpa)
 
