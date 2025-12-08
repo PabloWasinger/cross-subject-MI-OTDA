@@ -267,7 +267,7 @@ def evaluate_tl_methods_blockwise(X_source, y_source, X_target, y_target,
 
 
 
-def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_params, n_calib=20,  verbose=True):
+def evaluate_tl_methods_samplewise(X_source, y_source, X_target, y_target, cv_params, n_calib=24,  verbose=True):
     """
     Evaluate transfer learning methods with incremental trial-by-trial calibration using optimized hyperparameters.
 

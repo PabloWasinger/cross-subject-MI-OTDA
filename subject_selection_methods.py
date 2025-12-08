@@ -50,10 +50,10 @@ def load_subject_data(subject_id, session='T', data_dir='data'):
 def calculate_csp_eigenvalue_ratio(subject_id, session='T', n_components=6):
     """
     Calculate CSP eigenvalue ratio as a measure of class separability.
-    
+
     Computes the ratio between largest and smallest CSP eigenvalues,
     indicating how well the spatial filters separate the two classes.
-    
+
     Parameters
     ----------
     subject_id : int
@@ -62,7 +62,7 @@ def calculate_csp_eigenvalue_ratio(subject_id, session='T', n_components=6):
         Session to analyze.
     n_components : int, default=6
         Number of CSP components (must be even).
-    
+
     Returns
     -------
     dict
@@ -72,33 +72,44 @@ def calculate_csp_eigenvalue_ratio(subject_id, session='T', n_components=6):
         - 'eigenvalues': Array of all eigenvalues
         - 'separability_score': Normalized score (0-100)
     """
+    from scipy.linalg import eigh
 
-    
     X, y = load_subject_data(subject_id, session)
-    
-    # Entrenar CSP
-    csp = CSP(n_components=n_components, reg=None, log=False, norm_trace=False)
-    csp.fit(X, y)
-    
-    # Obtener autovalores (ya vienen ordenados: mayor a menor)
-    eigenvalues = csp.eigenvalues_
-    
+
+    # Separate data by class
+    X_0 = X[y == 0]
+    X_1 = X[y == 1]
+
+    # Compute covariance matrices for each class
+    cov_0 = np.mean([np.cov(trial) for trial in X_0], axis=0)
+    cov_1 = np.mean([np.cov(trial) for trial in X_1], axis=0)
+
+    # Solve generalized eigenvalue problem: cov_0 * v = lambda * (cov_0 + cov_1) * v
+    # This gives the CSP eigenvalues
+    eigenvalues, _ = eigh(cov_0, cov_0 + cov_1)
+
+    # Sort eigenvalues in descending order (most discriminative first)
+    eigenvalues = np.sort(eigenvalues)[::-1]
+
+    # Select only n_components eigenvalues (matching CSP behavior)
+    eigenvalues = eigenvalues[:n_components]
+
     # Ratio del par más discriminativo (primero y último)
     ratio_max = eigenvalues[0] / eigenvalues[-1]
-    
+
     # Ratios de todos los pares
     n_pairs = n_components // 2
     ratios = []
     for i in range(n_pairs):
         ratio = eigenvalues[i] / eigenvalues[-(i+1)]
         ratios.append(ratio)
-    
+
     ratio_mean = np.mean(ratios)
-    
+
     # Score de separabilidad normalizado [0-100]
     # Basado en escala logarítmica (ratio=2 → 0, ratio=100 → 100)
     separability_score = np.clip(20 * np.log10(ratio_mean), 0, 100)
-    
+
     return {
         'ratio_max': ratio_max,
         'ratio_mean': ratio_mean,
