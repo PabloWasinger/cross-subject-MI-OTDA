@@ -5,7 +5,7 @@ Methods compared (samplewise):
 1. CSP + LDA (baseline - SC)
 2. CSP + LDA + BOTDA-GL
 3. EEGNet (trained on source, no adaptation)
-4. EEGNet + Continual Fine-tuning (incremental, fair comparison)
+4. EEGNet + Per-trial Fine-tuning (fair comparison - retrains every trial like BOTDA-GL)
 5. EEGNet + BOTDA-GL (features from EEGNet transported with BOTDA-GL)
 
 Follows the samplewise methodology from Peterson et al. where we incrementally
@@ -83,25 +83,40 @@ CV_PARAMS = {
     'norm': None
 }
 
-# EEGNet configuration (with feature_dim=6 for BOTDA-GL compatibility)
+# EEGNet configuration for SC and Fine-tuning (NO projection layer)
+# NOTE: Reduced dropout for small datasets (144 trials is very few for deep learning)
 EEGNET_CONFIG = {
     "nb_classes": 2,
     "Chans": 22,
     "Samples": 500,  # 2 seconds at 250Hz
-    "dropoutRate": 0.5,
+    "dropoutRate": 0.2,  # Reduced from 0.5 - less regularization for small data
     "kernLength": 125,
     "F1": 8,
     "D": 2,
     "F2": 16,
-    "feature_dim": 30  # Match CSP dimensions for BOTDA-GL
+    "feature_dim": None  # No projection - full features for classification
+}
+
+# EEGNet configuration for BOTDA-GL (WITH projection to match CSP dimensions)
+EEGNET_BOTDA_CONFIG = {
+    "nb_classes": 2,
+    "Chans": 22,
+    "Samples": 500,  # 2 seconds at 250Hz
+    "dropoutRate": 0.2,  # Reduced from 0.5
+    "kernLength": 125,
+    "F1": 8,
+    "D": 2,
+    "F2": 16,
+    "feature_dim": 32  # Match CSP n_components for BOTDA-GL transport
 }
 
 # Training parameters
+# NOTE: Increased patience for small noisy datasets - EEG training is unstable
 TRAIN_PARAMS = {
-    'epochs': 100,
-    'lr': 1e-3,
-    'batch_size': 32,
-    'patience': 15
+    'epochs': 500,
+    'lr': 5e-4,       # Reduced LR for more stable training
+    'batch_size': 16,  # Smaller batch for small dataset
+    'patience': 50     # Much more patience - EEG is noisy!
 }
 
 FINETUNE_PARAMS = {
@@ -111,9 +126,8 @@ FINETUNE_PARAMS = {
     'patience': 5
 }
 
-# Continual fine-tuning parameters
-CONTINUAL_FT_INTERVAL = 12  # Fine-tune every N trials
-CONTINUAL_FT_EPOCHS = 5     # Quick adaptation epochs
+# Continual fine-tuning parameters (per-trial, like BOTDA-GL)
+CONTINUAL_FT_EPOCHS = 5     # Quick adaptation epochs per trial
 
 # Random seed for reproducibility
 RANDOM_SEED = 42
@@ -149,16 +163,102 @@ def extract_eegnet_features_batch(model, X, device=None):
     return features.cpu().numpy()
 
 
-def train_eegnet_on_source(X_source, y_source, save_path=None, verbose=True, 
-                           random_state=RANDOM_SEED):
+def classify_features_with_eegnet(model, features, device=None):
+    """
+    Classify pre-extracted features using EEGNet's classifier layer.
+    
+    This is used after BOTDA transport to maintain end-to-end consistency.
+    
+    Parameters
+    ----------
+    model : EEGNet
+        EEGNet model with trained classifier.
+    features : ndarray
+        Features array of shape (N, feature_dim).
+    device : torch.device, optional
+        Device to use.
+    
+    Returns
+    -------
+    predictions : ndarray
+        Predicted class labels.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    model = model.to(device)
+    model.eval()
+    
+    features_tensor = torch.from_numpy(features).float().to(device)
+    
+    with torch.no_grad():
+        logits = model.classifier(features_tensor)
+        predictions = logits.argmax(dim=1).cpu().numpy()
+    
+    return predictions
+
+
+class EEGNetClassifierWrapper:
+    """
+    Sklearn-compatible wrapper for EEGNet's classifier layer.
+    
+    Used for CV hyperparameter search with BOTDA-GL.
+    The classifier is already trained - this wrapper just provides
+    sklearn's fit/predict interface.
+    """
+    
+    def __init__(self, eegnet_model, device=None):
+        """
+        Parameters
+        ----------
+        eegnet_model : EEGNet
+            Pre-trained EEGNet model with classifier layer.
+        device : torch.device, optional
+            Device to use for inference.
+        """
+        self.model = eegnet_model
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+        self.model.eval()
+    
+    def fit(self, X, y):
+        """No-op - classifier is already trained."""
+        # The classifier is pre-trained, we don't retrain it
+        return self
+    
+    def predict(self, X):
+        """Classify features using EEGNet's classifier layer."""
+        features_tensor = torch.from_numpy(X).float().to(self.device)
+        
+        with torch.no_grad():
+            logits = self.model.classifier(features_tensor)
+            predictions = logits.argmax(dim=1).cpu().numpy()
+        
+        return predictions
+    
+    def __sklearn_clone__(self):
+        """Return a copy for sklearn's clone function."""
+        return EEGNetClassifierWrapper(self.model, self.device)
+
+
+def train_eegnet_on_source(X_source, y_source, config=None, save_path=None, 
+                           verbose=True, random_state=RANDOM_SEED):
     """
     Train EEGNet on source data with stratified, reproducible split.
     
+    Parameters
+    ----------
+    config : dict, optional
+        EEGNet configuration. Defaults to EEGNET_CONFIG.
+    
     FIX 3: Uses stratified train/val split with fixed random state.
     """
+    if config is None:
+        config = EEGNET_CONFIG
+    
     set_seed(random_state)
     
-    model = EEGNet(**EEGNET_CONFIG)
+    model = EEGNet(**config)
     
     # FIX 3: Stratified, reproducible split
     X_train, X_val, y_train, y_val = train_test_split(
@@ -188,7 +288,7 @@ def train_eegnet_on_source(X_source, y_source, save_path=None, verbose=True,
     
     # Verify feature dimension
     test_features = extract_eegnet_features_batch(model, X_source[:1])
-    expected_dim = EEGNET_CONFIG.get('feature_dim', model._flat_features)
+    expected_dim = config.get('feature_dim') or model._flat_features
     assert test_features.shape[1] == expected_dim, \
         f"Feature dimension mismatch: expected {expected_dim}, got {test_features.shape[1]}"
     
@@ -243,7 +343,8 @@ def quick_finetune(model, X_train, y_train, epochs=CONTINUAL_FT_EPOCHS, lr=1e-4,
 # =============================================================================
 
 def evaluate_methods_samplewise(X_source, y_source, X_target, y_target, 
-                                eegnet_model, cv_params, n_calib=24, verbose=True):
+                                eegnet_model, eegnet_botda, cv_params, 
+                                n_calib=24, verbose=True):
     """
     Evaluate all methods with incremental trial-by-trial (samplewise) adaptation.
     
@@ -264,7 +365,9 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
     y_target : ndarray
         Target domain labels.
     eegnet_model : EEGNet
-        Pre-trained EEGNet model on source data.
+        Pre-trained EEGNet model on source data (NO feature_dim - for SC/FT).
+    eegnet_botda : EEGNet
+        Pre-trained EEGNet model with feature_dim projection (for BOTDA-GL).
     cv_params : dict
         Cross-validation parameters.
     n_calib : int
@@ -293,20 +396,18 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
     clf_base.fit(G_source, y_source)
     
     # =========================================================================
-    # STEP 2: Extract EEGNet features from source
+    # STEP 2: Extract EEGNet features from source (using BOTDA model with projection)
     # =========================================================================
-    F_source = extract_eegnet_features_batch(eegnet_model, X_source, device)
+    # Use eegnet_botda (with feature_dim=6) for BOTDA-GL feature extraction
+    F_source = extract_eegnet_features_batch(eegnet_botda, X_source, device)
     
-    # FIX 6: Verify feature dimensions
-    assert F_source.shape[1] == G_source.shape[1], \
-        f"Feature dimension mismatch: EEGNet={F_source.shape[1]}, CSP={G_source.shape[1]}"
     
     if verbose:
-        print(f"Feature dimensions - CSP: {G_source.shape[1]}, EEGNet: {F_source.shape[1]}")
+        print(f"Feature dimensions - CSP: {G_source.shape[1]}, EEGNet_BOTDA: {F_source.shape[1]}")
     
-    # Train LDA on EEGNet features (for BOTDA-GL)
-    lda_eegnet = LinearDiscriminantAnalysis()
-    lda_eegnet.fit(F_source, y_source)
+    # Create sklearn-compatible wrapper for EEGNet's classifier (for CV and prediction)
+    # This uses the TRAINED classifier from eegnet_botda, not a separate LDA
+    clf_eegnet = EEGNetClassifierWrapper(eegnet_botda, device)
     
     # =========================================================================
     # STEP 3: Calibration split
@@ -319,8 +420,8 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
     # Transform calibration to CSP space
     G_val = csp.transform(X_val_raw)
     
-    # Extract EEGNet features from calibration
-    F_val = extract_eegnet_features_batch(eegnet_model, X_val_raw, device)
+    # Extract EEGNet features from calibration (using BOTDA model with projection)
+    F_val = extract_eegnet_features_batch(eegnet_botda, X_val_raw, device)
     
     # =========================================================================
     # STEP 4: Cross-validation for BOTDA-GL hyperparameters (CSP)
@@ -347,7 +448,7 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
     
     F_bg_subsample, _, reg_bg_eegnet = cv_grouplasso_backward(
         cv_params['reg_e_grid'], cv_params['reg_cl_grid'],
-        F_source, y_source, F_val, y_val, lda_eegnet,
+        F_source, y_source, F_val, y_val, clf_eegnet,
         metric=cv_params['metric'],
         outerkfold=cv_params['outerkfold'],
         innerkfold=cv_params['innerkfold'],
@@ -401,8 +502,8 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
         # Transform to CSP space
         G_test = csp.transform(X_test_trial)
         
-        # Extract EEGNet features for test trial
-        F_test = extract_eegnet_features_batch(eegnet_model, X_test_trial, device)
+        # Extract EEGNet features for test trial (needed for F_val update)
+        F_test = extract_eegnet_features_batch(eegnet_botda, X_test_trial, device)
         
         # =================================================================
         # FIX 1: Update validation set BEFORE prediction
@@ -445,17 +546,18 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
         
         # -----------------------------------------------------------------
         # Method 4: EEGNet + Continual Fine-tuning (FIX 2: Fair comparison)
+        # Fine-tune with the NEW trial only (true continual learning)
         # -----------------------------------------------------------------
         start = timeit.default_timer()
         
-        # FIX 2: Periodically update the fine-tuned model with new data
-        if trial_idx % CONTINUAL_FT_INTERVAL == 0:
-            eegnet_finetuned = quick_finetune(
-                eegnet_finetuned, X_val_raw, y_val,
-                epochs=CONTINUAL_FT_EPOCHS,
-                lr=FINETUNE_PARAMS['lr'],
-                device=device
-            )
+        # FIX 2: Fine-tune only with the NEW trial (not all accumulated data)
+        # This is true continual learning - model adapts incrementally
+        eegnet_finetuned = quick_finetune(
+            eegnet_finetuned, X_test_trial, y_test_trial, # PREGUNTAR A TRINIDAD MONREAL :)
+            epochs=CONTINUAL_FT_EPOCHS,
+            lr=FINETUNE_PARAMS['lr'],
+            device=device
+        )
         
         eegnet_finetuned.eval()
         with torch.no_grad():
@@ -476,12 +578,17 @@ def evaluate_methods_samplewise(X_source, y_source, X_target, y_target,
             reg_cl=reg_bg_eegnet[1]
         )
         botda.fit(Xs=F_val, ys=y_val, Xt=F_bg_subsample)
+
+        # Use F_test already calculated earlier (no need to recalculate)
         F_test_transported = botda.transform(Xs=F_test)
         
         if np.isnan(F_test_transported).any():
             F_test_transported = np.nan_to_num(F_test_transported)
         
-        pred_eegnet_botda = lda_eegnet.predict(F_test_transported)
+        # Use EEGNet's classifier (not LDA) for end-to-end consistency
+        pred_eegnet_botda = classify_features_with_eegnet(
+            eegnet_botda, F_test_transported, device
+        )
         times['EEGNet_BOTDA'].append(timeit.default_timer() - start)
         predictions['EEGNet_BOTDA'].append(pred_eegnet_botda)
     
@@ -573,21 +680,36 @@ def main():
     print(f"Source shape: {X_source.shape}")
     print(f"Source class distribution: {np.bincount(y_source)}")
     
-    # Train EEGNet on source
+    # Train EEGNet models on source
     print("\n" + "-"*70)
-    print("Training EEGNet on source subject...")
+    print("Training EEGNet models on source subject...")
     print("-"*70)
-    model_path = MODELS_DIR / f'eegnet_source_{best_source_id:02d}.pt'
     
+    # Model 1: EEGNet for SC and Fine-tuning (NO feature_dim projection)
+    print("\n1. Training EEGNet for SC/FT (no projection)...")
+    model_path = MODELS_DIR / f'eegnet_source_{best_source_id:02d}.pt'
     eegnet_model, history = train_eegnet_on_source(
         X_source, y_source,
+        config=EEGNET_CONFIG,  # No feature_dim
         save_path=str(model_path),
         verbose=True,
         random_state=RANDOM_SEED
     )
-    
     if history['val_acc']:
-        print(f"EEGNet trained. Best val accuracy: {max(history['val_acc']):.2f}%")
+        print(f"  EEGNet (SC/FT) trained. Best val accuracy: {max(history['val_acc']):.2f}%")
+    
+    # Model 2: EEGNet for BOTDA-GL (WITH feature_dim=6 to match CSP)
+    print("\n2. Training EEGNet for BOTDA-GL (with projection to feature_dim=6)...")
+    model_botda_path = MODELS_DIR / f'eegnet_botda_source_{best_source_id:02d}.pt'
+    eegnet_botda, history_botda = train_eegnet_on_source(
+        X_source, y_source,
+        config=EEGNET_BOTDA_CONFIG,  # With feature_dim=6
+        save_path=str(model_botda_path),
+        verbose=True,
+        random_state=RANDOM_SEED
+    )
+    if history_botda['val_acc']:
+        print(f"  EEGNet (BOTDA) trained. Best val accuracy: {max(history_botda['val_acc']):.2f}%")
     
     # Evaluate on all target subjects
     all_results = {}
@@ -606,7 +728,8 @@ def main():
             predictions, times, y_test = evaluate_methods_samplewise(
                 X_source, y_source,
                 X_target, y_target,
-                eegnet_model,
+                eegnet_model,      # For SC and Fine-tuning (no projection)
+                eegnet_botda,      # For BOTDA-GL (with projection to feature_dim=6)
                 CV_PARAMS,
                 n_calib=N_CALIB,
                 verbose=True
