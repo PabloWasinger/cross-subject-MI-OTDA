@@ -89,7 +89,7 @@ EEGNET_CONFIG = {
     "nb_classes": 2,
     "Chans": 22,
     "Samples": 500,  # 2 seconds at 250Hz
-    "dropoutRate": 0.2,  # Reduced from 0.5 - less regularization for small data
+    "dropoutRate": 0.5,  # Reduced from 0.5 - less regularization for small data
     "kernLength": 125,
     "F1": 8,
     "D": 2,
@@ -102,7 +102,7 @@ EEGNET_BOTDA_CONFIG = {
     "nb_classes": 2,
     "Chans": 22,
     "Samples": 500,  # 2 seconds at 250Hz
-    "dropoutRate": 0.2,  # Reduced from 0.5
+    "dropoutRate": 0.5,  # Reduced from 0.5
     "kernLength": 125,
     "F1": 8,
     "D": 2,
@@ -115,8 +115,8 @@ EEGNET_BOTDA_CONFIG = {
 TRAIN_PARAMS = {
     'epochs': 500,
     'lr': 5e-4,       # Reduced LR for more stable training
-    'batch_size': 16,  # Smaller batch for small dataset
-    'patience': 50     # Much more patience - EEG is noisy!
+    'batch_size': 64,  # Smaller batch for small dataset
+    'patience': 150     # Much more patience - EEG is noisy!
 }
 
 FINETUNE_PARAMS = {
