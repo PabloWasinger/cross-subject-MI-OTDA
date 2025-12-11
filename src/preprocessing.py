@@ -13,11 +13,11 @@ def compute_eog_regression_coefficients(blocks, eeg_channels, eog_channels):
 
     eog_calibration = mne.concatenate_raws(calibration_raws)
 
-    # Extract data
-    eeg_data = eog_calibration.get_data(picks=eeg_channels)  # (22, n_samples)
-    eog_data = eog_calibration.get_data(picks=eog_channels)  # (3, n_samples)
+    
+    eeg_data = eog_calibration.get_data(picks=eeg_channels)  
+    eog_data = eog_calibration.get_data(picks=eog_channels)  
 
-    # Regression: EEG = beta @ EOG + residual
+    
     coefficients = eeg_data @ eog_data.T @ np.linalg.inv(eog_data @ eog_data.T)
 
 
@@ -45,13 +45,12 @@ def apply_eog_regression(raw, coefficients, eeg_channels, eog_channels):
     """
     raw_clean = raw.copy()
 
-    eeg_data = raw_clean.get_data(picks=eeg_channels)  # (22, n_samples)
-    eog_data = raw_clean.get_data(picks=eog_channels)  # (3, n_samples)
+    eeg_data = raw_clean.get_data(picks=eeg_channels)  
+    eog_data = raw_clean.get_data(picks=eog_channels)  
 
-    # Clean: EEG_clean = EEG - beta @ EOG
-    eeg_clean = eeg_data - coefficients @ eog_data  # (22,3) @ (3,n) = (22,n)
+    
+    eeg_clean = eeg_data - coefficients @ eog_data  
 
-    # Update raw data
     for i, ch in enumerate(eeg_channels):
         idx = raw_clean.ch_names.index(ch)
         raw_clean._data[idx, :] = eeg_clean[i, :]
@@ -83,7 +82,6 @@ def preprocess_blocks(blocks, eeg_channels, eog_channels, l_freq=8, h_freq=30):
     coefficients : ndarray
         EOG regression coefficients.
     """
-    # Compute coefficients from calibration blocks
     coefficients = compute_eog_regression_coefficients(blocks, eeg_channels, eog_channels)
 
     clean_runs = {}

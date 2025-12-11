@@ -159,11 +159,11 @@ def plot_accuracy_table(csv_file='results/blockwise_accuracy_by_subject.csv', ou
     """Plot accuracy table with methods as rows and subjects as columns."""
     df = pd.read_csv(csv_file, index_col=0)
     
-    # Check if DataFrame is empty
+    
     if df.empty:
         raise ValueError(f"CSV file '{csv_file}' contains no data. Please run the evaluation first.")
     
-    # Drop Std column if present (we only want Mean for display)
+    
     if 'Std' in df.columns:
         df = df.drop(columns=['Std'])
 

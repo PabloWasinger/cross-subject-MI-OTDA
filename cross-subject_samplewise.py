@@ -47,10 +47,9 @@ EEG_CHANNELS = [
 ]
 EOG_CHANNELS = ['EOG-left', 'EOG-central', 'EOG-right']
 
-SUBJECTS = [1, 2, 3, 5, 6, 7, 8, 9] # Excluding subject 4
+SUBJECTS = [1, 2, 3, 5, 6, 7, 8, 9] 
 
-# Parameters for Cross-Subject Adaptation
-# N_CALIB: Number of samples from the NEW subject used for calibration/adaptation
+
 N_CALIB = 24 
 
 CV_PARAMS = {
@@ -93,17 +92,15 @@ def load_single_session(subject_id, session='T', verbose=False):
 
 def save_results(source_id, target_id, predictions, times, y_test):
     """Save results for a specific Source -> Target pair."""
-    # Calculate accuracies
     acc_df = calculate_accuracies(predictions, y_test, print_results=True)
 
-    # Filename structure: Source_XX_Target_YY_...
     base_name = f"src_{source_id:02d}_tgt_{target_id:02d}"
 
-    # Save Accuracies
+    
     acc_file = RESULTS_DIR / f"{base_name}_accuracies.csv"
     acc_df.to_csv(acc_file, index=False)
     
-    # Save Predictions
+    
     pred_data = {'trial': list(range(1, len(y_test) + 1)), 'true_label': y_test}
     for method, preds in predictions.items():
         pred_data[method] = np.array(preds).flatten()
@@ -111,7 +108,7 @@ def save_results(source_id, target_id, predictions, times, y_test):
     pred_df = pd.DataFrame(pred_data)
     pred_df.to_csv(RESULTS_DIR / f"{base_name}_predictions.csv", index=False)
 
-    # Save Times
+    
     times_data = {'trial': list(range(1, len(y_test) + 1))}
     for method, method_times in times.items():
         times_data[method] = method_times
@@ -134,7 +131,6 @@ def main():
     X_source, y_source = load_single_session(best_source_id, session='T', verbose=True)
     
     
-    # Iterate over Targets
     
     targets = [s for s in SUBJECTS if s != best_source_id]
     
@@ -146,13 +142,11 @@ def main():
         print(f"{'-'*40}")
         
         try:
-            # Load Target Data (Using Session T as the 'new' session to adapt to)
             X_target, y_target = load_single_session(target_id, session='T', verbose=True)
             
             print(f"Source Data: {X_source.shape}")
             print(f"Target Data: {X_target.shape}")
             
-            # Run Evaluation
             predictions, times = evaluate_tl_methods_samplewise(
                 X_source=X_source,
                 y_source=y_source,
@@ -163,10 +157,8 @@ def main():
                 verbose=True
             )
             
-            # Extract test labels (excluding calibration trials)
             y_test_predicted = y_target[N_CALIB:]
             
-            # Save
             save_results(best_source_id, target_id, predictions, times, y_test_predicted)
             
         except Exception as e:

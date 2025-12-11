@@ -15,7 +15,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent / 'models'))
 
-# Reutilizar todo de pipeline_comparison
+
 from pipeline_comparison import (
     set_seed, train_eegnet_on_source, evaluate_methods_samplewise,
     calculate_accuracies, EEGNET_CONFIG, EEGNET_BOTDA_CONFIG,
@@ -23,7 +23,6 @@ from pipeline_comparison import (
 )
 from subject_selection_methods import load_subject_data, load_subject_data_raw
 
-# Directorios específicos para esta variante
 RESULTS_DIR = Path("results") / "all_sources"
 MODELS_DIR = Path("models") / "checkpoints_all_sources"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -112,7 +111,7 @@ def main():
         print(f"{'='*70}")
         
         try:
-            # Load sources (all except target, both sessions) - filtered AND raw
+            
             print(f"\nLoading source data (all subjects except S{target_id})...")
             X_source_filt, X_source_raw, y_source, source_info = load_all_sources_data(target_id)
             print(f"  Subjects: {source_info['subjects']}")
@@ -130,20 +129,20 @@ def main():
             
             model_path = MODELS_DIR / f'eegnet_allsrc_tgt_{target_id:02d}.pt'
             eegnet_model, history = train_eegnet_on_source(
-                X_source_raw, y_source, config=EEGNET_CONFIG,  # RAW data
+                X_source_raw, y_source, config=EEGNET_CONFIG, 
                 save_path=str(model_path), verbose=True
             )
             
             model_botda_path = MODELS_DIR / f'eegnet_botda_allsrc_tgt_{target_id:02d}.pt'
             eegnet_botda, history_botda = train_eegnet_on_source(
-                X_source_raw, y_source, config=EEGNET_BOTDA_CONFIG,  # RAW data
+                X_source_raw, y_source, config=EEGNET_BOTDA_CONFIG,  
                 save_path=str(model_botda_path), verbose=True
             )
             
-            # Evaluate - pass both filtered and raw data
+            
             predictions, times, y_test = evaluate_methods_samplewise(
-                X_source_filt, X_source_raw, y_source,    # Source: filtered + raw
-                X_target_filt, X_target_raw, y_target,    # Target: filtered + raw
+                X_source_filt, X_source_raw, y_source,    
+                X_target_filt, X_target_raw, y_target,    
                 eegnet_model, eegnet_botda, CV_PARAMS,
                 n_calib=N_CALIB, verbose=True
             )
@@ -157,7 +156,7 @@ def main():
             traceback.print_exc()
             continue
     
-    # Summary
+    
     print("\n" + "="*70)
     print("FINAL SUMMARY")
     print("="*70)

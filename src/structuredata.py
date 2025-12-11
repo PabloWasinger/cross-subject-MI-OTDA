@@ -55,10 +55,10 @@ def apply_true_labels_to_raw(raw, true_labels, verbose=False):
     raw_corrected = raw.copy()
     events, event_id = mne.events_from_annotations(raw_corrected, verbose=False)
 
-    # Find code for event 783 (unknown cue)
+    
     cue_unknown_code = None
     for name, code in event_id.items():
-        if name == '783':  # Exact match, not substring
+        if name == '783':  
             cue_unknown_code = code
             break
 
@@ -67,11 +67,11 @@ def apply_true_labels_to_raw(raw, true_labels, verbose=False):
             print("No 783 events found, assuming labels are already present")
         return raw_corrected
 
-    # Find all 783 events
+    
     unknown_indices = np.where(events[:, 2] == cue_unknown_code)[0]
 
     if len(unknown_indices) != len(true_labels):
-        # Fallback logic if lengths mismatch slightly (sometimes happens in GDFs)
+
         print(f"Warning: Mismatch: {len(unknown_indices)} unknown events but {len(true_labels)} labels provided. Truncating to min.")
         min_len = min(len(unknown_indices), len(true_labels))
         unknown_indices = unknown_indices[:min_len]
@@ -80,21 +80,19 @@ def apply_true_labels_to_raw(raw, true_labels, verbose=False):
     if verbose:
         print(f"Replacing {len(unknown_indices)} event 783 with true class labels")
 
-    # Create new annotations list
     new_onsets = []
     new_durations = []
     new_descriptions = []
 
-    # Map class labels to event descriptions
     label_to_desc = {1: '769', 2: '770', 3: '771', 4: '772'}
 
     trial_idx = 0
 
     unknown_indices_set = set(unknown_indices)
     
-    # Re-extract events to map index back to annotation 
     current_unknown_count = 0
-    for annot in raw_corrected.annotations:
+    for annot in raw_corrected.annotations:    
+        current_unknown_count = 0
         desc = annot['description']
         if desc == '783':
             if current_unknown_count < len(true_labels):
@@ -109,7 +107,6 @@ def apply_true_labels_to_raw(raw, true_labels, verbose=False):
         new_onsets.append(annot['onset'])
         new_durations.append(annot['duration'])
 
-    # Create new Annotations object
     new_annotations = mne.Annotations(
         onset=new_onsets,
         duration=new_durations,
@@ -142,7 +139,6 @@ def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
     """
     raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=False)
 
-    # Apply true labels if provided (for evaluation files)
     if true_labels_path is not None:
         true_labels = load_true_labels(true_labels_path)
         raw = apply_true_labels_to_raw(raw, true_labels, verbose=verbose)
@@ -156,7 +152,6 @@ def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
         """Extracts a time segment from raw data."""
         tmin = start_sample / sfreq
         tmax = min(end_sample / sfreq, raw.times[-1])
-        # Buffer to avoid boundary issues
         if tmax > tmin: 
              return raw.copy().crop(tmin=tmin, tmax=tmax - 0.001)
         return raw.copy().crop(tmin=tmin, tmax=tmax)
@@ -164,7 +159,7 @@ def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
     def find_event_code(target_code):
         """Finds MNE event code matching target code number (exact match)."""
         for name, code in event_id.items():
-            if name == str(target_code):  # Exact match
+            if name == str(target_code): 
                 return code
         return None
 
@@ -208,7 +203,7 @@ def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
         if verbose:
             print(f"Found {len(run_start_samples)} total run markers, {len(mi_run_starts)} are MI runs (after EOG)")
         
-        # Get trial start samples for validation
+        
         if trial_code is not None:
             trial_samples = events[events[:, 2] == trial_code, 0]
         else:
@@ -216,8 +211,7 @@ def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
         
         run_idx = 0
         for i, start_sample in enumerate(mi_run_starts):
-            # Determine end of this run
-            # Find index in original run_start_samples to get the NEXT run start
+
             original_idx = np.where(run_start_samples == start_sample)[0][0]
             
             if original_idx + 1 < len(run_start_samples):
@@ -225,10 +219,8 @@ def organize_session_by_blocks(filepath, true_labels_path=None, verbose=False):
             else:
                 end_sample = int(len(raw.times) * sfreq)
             
-            # Count trials in this run segment
             trials_in_run = np.sum((trial_samples >= start_sample) & (trial_samples < end_sample))
             
-            # Ignore runs with 0 trials
             if trials_in_run > 0:  
                 blocks[f'run_{run_idx}'] = extract_segment(start_sample, end_sample)
                 if verbose:
@@ -266,7 +258,6 @@ def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verb
     """
     all_epochs = []
 
-    # Fixed event_id mapping to ensure consistency across runs
     fixed_event_id = {
         'left_hand': 1,
         'right_hand': 2,
@@ -274,14 +265,13 @@ def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verb
         'tongue': 4
     }
 
-    # MI cue event codes (original GDF values)
     MI_EVENT_NAMES = {'769', '770', '771', '772'}
 
-    for run_name in sorted(clean_runs.keys()):  # Sort to ensure consistent order
+    for run_name in sorted(clean_runs.keys()):  
         raw = clean_runs[run_name]
         events, event_id_raw = mne.events_from_annotations(raw, verbose=False)
 
-        # Map original event codes to fixed codes
+        
         event_mapping = {}
         for name, code in event_id_raw.items():
             if name == '769':
@@ -322,17 +312,17 @@ def extract_epochs_from_runs(clean_runs, tmin=0.5, tmax=2.5, baseline=None, verb
                 baseline=baseline,
                 preload=True,
                 verbose=False,
-                event_repeated='drop'  # Handle any remaining duplicate timestamps
+                event_repeated='drop'  
             )
             all_epochs.append(epochs)
 
-    # Concatenate all epochs from different runs
+    
     if len(all_epochs) > 0:
         epochs_combined = mne.concatenate_epochs(all_epochs)
 
         if verbose:
             print(f"Total epochs extracted: {len(epochs_combined)}")
-            # Print class distribution
+            
             for class_name, class_code in fixed_event_id.items():
                 count = np.sum(epochs_combined.events[:, 2] == class_code)
                 print(f"  {class_name}: {count}")
@@ -349,23 +339,22 @@ def filter_binary_classes(epochs, reject_artifacts=True, verbose=False):
     if epochs is None:
         return None, None
 
-    # Select only left and right hand trials
+
     epochs_binary = epochs['left_hand', 'right_hand']
 
-    # Exclude artifact trials if requested
+    
     if reject_artifacts and hasattr(epochs_binary, 'drop_bad'):
         epochs_binary.drop_bad()
 
-    # Get data and labels (pick only EEG channels by excluding EOG explicitly)
+    
     eeg_picks = [ch for ch in epochs_binary.ch_names if ch.startswith('EEG')]
-    X = epochs_binary.get_data(picks=eeg_picks)  # (n_trials, n_eeg_channels, n_times)
-    y = epochs_binary.events[:, 2]  # Event codes (remapped by MNE)
+    X = epochs_binary.get_data(picks=eeg_picks)  
+    y = epochs_binary.events[:, 2]  
 
-    # Get actual event codes from epochs
+    
     left_code = epochs_binary.event_id['left_hand']
     right_code = epochs_binary.event_id['right_hand']
 
-    # Convert event codes to binary labels (0=left, 1=right)
     y_binary = (y == right_code).astype(int)
 
     if verbose:
@@ -413,22 +402,19 @@ def filter_multiclass(epochs, reject_artifacts=True, verbose=False):
     if epochs is None:
         return None, None
 
-    # Exclude artifact trials if requested
+    
     if reject_artifacts and hasattr(epochs, 'drop_bad'):
         epochs.drop_bad()
 
-    # Get data and labels (pick only EEG channels by excluding EOG explicitly)
     eeg_picks = [ch for ch in epochs.ch_names if ch.startswith('EEG')]
-    X = epochs.get_data(picks=eeg_picks)  # (n_trials, n_eeg_channels, n_times)
-    y = epochs.events[:, 2]  # Event codes (remapped by MNE)
+    X = epochs.get_data(picks=eeg_picks)  
+    y = epochs.events[:, 2]  
 
-    # Get actual event codes from epochs
     left_code = epochs.event_id['left_hand']
     right_code = epochs.event_id['right_hand']
     feet_code = epochs.event_id['feet']
     tongue_code = epochs.event_id['tongue']
 
-    # Map event codes to class labels (0-3)
     y_multiclass = np.zeros(len(y), dtype=int)
     y_multiclass[y == left_code] = 0
     y_multiclass[y == right_code] = 1
@@ -454,10 +440,9 @@ def load_session_multiclass_mi(filepath, eeg_channels, eog_channels,
     if verbose:
         print(f"Loading session: {filepath}")
 
-    # 1. Organize into blocks
+    
     blocks = organize_session_by_blocks(filepath, true_labels_path=true_labels_path, verbose=verbose)
 
-    # 2. Preprocess (EOG regression + bandpass filter)
     clean_runs, _ = preprocess_blocks(
         blocks, eeg_channels, eog_channels, l_freq, h_freq
     )
@@ -465,10 +450,8 @@ def load_session_multiclass_mi(filepath, eeg_channels, eog_channels,
     if verbose:
         print(f"Preprocessed {len(clean_runs)} runs")
 
-    # 3. Extract epochs with temporal window
     epochs = extract_epochs_from_runs(clean_runs, tmin, tmax, verbose=verbose)
 
-    # 4. Get all four classes
     X, y = filter_multiclass(epochs, reject_artifacts, verbose=verbose)
 
     return X, y, epochs
