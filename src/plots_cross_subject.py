@@ -34,14 +34,14 @@ def plot_cross_subject_accuracy_table(csv_file='results/cross_subject/accuracy_b
     if df.empty:
         raise ValueError(f"CSV file '{csv_file}' contains no data.")
     
-    # Reorder methods
+    
     df = df.reindex([m for m in METHOD_ORDER if m in df.index])
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.axis('tight')
     ax.axis('off')
 
-    # Build cell text
+    
     cell_text = []
     for method in df.index:
         row = [method]
@@ -54,7 +54,7 @@ def plot_cross_subject_accuracy_table(csv_file='results/cross_subject/accuracy_b
 
     columns = ['Method'] + list(df.columns)
 
-    # Create table
+    
     table = ax.table(cellText=cell_text, colLabels=columns, cellLoc='center',
                      loc='center', bbox=[0, 0, 1, 1])
 
@@ -62,17 +62,17 @@ def plot_cross_subject_accuracy_table(csv_file='results/cross_subject/accuracy_b
     table.set_fontsize(10)
     table.scale(1, 2)
 
-    # Style method names column
+    
     for i in range(len(df.index)):
         table[(i+1, 0)].set_facecolor('#E8E8E8')
         table[(i+1, 0)].set_text_props(weight='bold')
 
-    # Style header row
+    
     for j in range(len(columns)):
         table[(0, j)].set_facecolor('#4A90E2')
         table[(0, j)].set_text_props(weight='bold', color='white')
 
-    # Highlight best method for each target subject
+    
     subject_cols = [i for i, c in enumerate(df.columns) if c.startswith('S')]
     for j in subject_cols:
         col = df.columns[j]
@@ -81,7 +81,7 @@ def plot_cross_subject_accuracy_table(csv_file='results/cross_subject/accuracy_b
         table[(max_row_idx+1, j+1)].set_text_props(weight='bold')
         table[(max_row_idx+1, j+1)].set_facecolor('#90EE90')
 
-    # Style Mean and Std columns
+    
     for i in range(len(df.index)):
         mean_col_idx = list(df.columns).index('Mean') + 1 if 'Mean' in df.columns else None
         std_col_idx = list(df.columns).index('Std') + 1 if 'Std' in df.columns else None
@@ -91,14 +91,14 @@ def plot_cross_subject_accuracy_table(csv_file='results/cross_subject/accuracy_b
         if std_col_idx:
             table[(i+1, std_col_idx)].set_facecolor('#FFD6D6')
 
-    # Highlight best mean
+    
     if 'Mean' in df.columns:
         mean_col_idx = list(df.columns).index('Mean') + 1
         best_mean_idx = list(df.index).index(df['Mean'].idxmax())
         table[(best_mean_idx+1, mean_col_idx)].set_text_props(weight='bold')
         table[(best_mean_idx+1, mean_col_idx)].set_facecolor('#90EE90')
 
-    # Title
+    
     if title is None:
         title = 'Cross-Subject Transfer Learning Accuracy (%)\n(Per Target Subject)'
     plt.title(title, fontsize=14, weight='bold', pad=20)
@@ -132,11 +132,11 @@ def plot_cross_subject_accuracy_bars(csv_file='results/cross_subject/accuracy_by
     if df.empty:
         raise ValueError(f"CSV file '{csv_file}' contains no data.")
     
-    # Filter only subject columns (exclude Mean, Std)
+    
     subject_cols = [c for c in df.columns if c.startswith('S')]
     df_subjects = df[subject_cols]
     
-    # Reorder methods
+    
     df_subjects = df_subjects.reindex([m for m in METHOD_ORDER if m in df_subjects.index])
 
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -194,7 +194,7 @@ def plot_cross_subject_summary(csv_file='results/cross_subject/summary.csv',
     if df.empty:
         raise ValueError(f"CSV file '{csv_file}' contains no data.")
     
-    # Reorder methods
+    
     df['Method_order'] = df['Method'].apply(lambda x: METHOD_ORDER.index(x) if x in METHOD_ORDER else 999)
     df = df.sort_values('Method_order').drop('Method_order', axis=1)
 
@@ -203,14 +203,14 @@ def plot_cross_subject_summary(csv_file='results/cross_subject/summary.csv',
     x = np.arange(len(df))
     colors = plt.cm.viridis(np.linspace(0.2, 0.8, len(df)))
     
-    # Color best method green
+    
     best_idx = df['Mean_Accuracy'].idxmax()
     bar_colors = [colors[i] if i != best_idx else '#2ecc71' for i in range(len(df))]
     
     bars = ax.bar(x, df['Mean_Accuracy'], yerr=df['Std_Accuracy'], 
                   capsize=5, color=bar_colors, edgecolor='black', linewidth=0.5)
     
-    # Add value labels on bars
+    
     for i, (bar, val, std) in enumerate(zip(bars, df['Mean_Accuracy'], df['Std_Accuracy'])):
         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + std + 1,
                 f'{val:.1f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
@@ -256,28 +256,28 @@ def plot_cross_subject_heatmap(csv_file='results/cross_subject/accuracy_by_targe
     if df.empty:
         raise ValueError(f"CSV file '{csv_file}' contains no data.")
     
-    # Filter only subject columns
+    
     subject_cols = [c for c in df.columns if c.startswith('S')]
     df_subjects = df[subject_cols]
     
-    # Reorder methods
+    
     df_subjects = df_subjects.reindex([m for m in METHOD_ORDER if m in df_subjects.index])
 
     fig, ax = plt.subplots(figsize=(10, 6))
     
     im = ax.imshow(df_subjects.values, cmap='RdYlGn', aspect='auto', vmin=50, vmax=100)
     
-    # Add colorbar
+    
     cbar = ax.figure.colorbar(im, ax=ax)
     cbar.ax.set_ylabel('Accuracy (%)', rotation=-90, va='bottom', fontsize=10)
     
-    # Set ticks and labels
+    
     ax.set_xticks(np.arange(len(subject_cols)))
     ax.set_yticks(np.arange(len(df_subjects.index)))
     ax.set_xticklabels(subject_cols)
     ax.set_yticklabels(df_subjects.index)
     
-    # Add text annotations
+    
     for i in range(len(df_subjects.index)):
         for j in range(len(subject_cols)):
             text = ax.text(j, i, f'{df_subjects.iloc[i, j]:.1f}',
@@ -346,17 +346,17 @@ def plot_cross_subject_times_table(csv_file='results/cross_subject/times_summary
     table.set_fontsize(10)
     table.scale(1, 2)
 
-    # Style header
+    
     for j in range(len(columns)):
         table[(0, j)].set_facecolor('#4A90E2')
         table[(0, j)].set_text_props(weight='bold', color='white')
 
-    # Style method names
+    
     for i in range(len(df)):
         table[(i+1, 0)].set_facecolor('#E8E8E8')
         table[(i+1, 0)].set_text_props(weight='bold')
 
-    # Highlight fastest method
+    
     min_time_idx = df['Mean_Time'].idxmin()
     row_idx = df.index.get_loc(min_time_idx) + 1
     table[(row_idx, 1)].set_facecolor('#90EE90')
@@ -445,7 +445,7 @@ def plot_all_cross_subject(results_dir='results/cross_subject', verbose=True):
 
 
 if __name__ == "__main__":
-    # First run evaluations to generate CSVs, then generate plots
+    
     from evaluation_cross_subject import run_all_evaluations
     run_all_evaluations(verbose=True)
     plot_all_cross_subject(verbose=True)

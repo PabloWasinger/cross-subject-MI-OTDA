@@ -25,23 +25,21 @@ import ot
 import scipy.io
 import mne          
 from mne.decoding import CSP
-mne.set_log_level(verbose='warning') #to avoid info at terminal
+mne.set_log_level(verbose='warning') 
 import matplotlib.pyplot as pl
 np.random.seed(100)
 
-# from MIOTDAfunctions import*
 
-# pyRiemann transfer learning
 from pyriemann.classification import MDM
 from pyriemann.estimation import Covariances
 from pyriemann.utils.base import invsqrtm
 from pyriemann.transfer import TLCenter, TLRotate, TLStretch, encode_domains
 import timeit
 
-#ignore warning 
+
 from warnings import simplefilter
 
-# ignore all future warnings
+
 simplefilter(action='ignore', category=FutureWarning)
 simplefilter(action='ignore', category=UserWarning)
 
@@ -101,7 +99,7 @@ def SR(Data_S2, Labels_S2, n_calib, Xtr, Ytr, Xte):
     
     start = timeit.default_timer()
     
-    #Get Data
+    
     Xtr2add = Data_S2[0:n_calib] 
     Ytr2add = Labels_S2[0:n_calib]
     
@@ -111,22 +109,19 @@ def SR(Data_S2, Labels_S2, n_calib, Xtr, Ytr, Xte):
     Ytr2 = Ytr2[len(Ytr2add):]
     Xtr2 = Xtr2[len(Ytr2add):]
 
-    # Create a new CSP
     csp = CSP(n_components=6, reg='empirical', log=True, norm_trace=False, cov_est='epoch')
     
-    #learn new csp filters
     Gtr = csp.fit_transform(Xtr2,Ytr2)
     
-    #learn new lda
     lda = LinearDiscriminantAnalysis()
     lda.fit(Gtr,Ytr2)
 
-    # Apply on new test data
+    
     Gte = csp.transform(Xte)
-    #ldatest
+    
     yt_predict = lda.predict(Gte)
     
-    # time
+    
     stop = timeit.default_timer()
     time = stop - start
     
@@ -169,14 +164,11 @@ def Forward_Sinkhorn_Transport(G_subsample, regulizers, G_source, Y_source, G_va
     """
 
 
-    #time
     start = timeit.default_timer()
         
     otda = ot.da.SinkhornTransport(metric=metric, reg_e=regulizers)
-    #learn the map
     otda.fit(Xs=G_subsample, Xt=G_val)
     
-    #apply the mapping over source data
     transp_Xs = otda.transform(Xs=G_source)
 
     if np.isnan(transp_Xs).any() or np.isinf(transp_Xs).any():
@@ -184,13 +176,10 @@ def Forward_Sinkhorn_Transport(G_subsample, regulizers, G_source, Y_source, G_va
         transp_Xs = np.nan_to_num(transp_Xs)
 
     clf_forward = clone(clf)
-    # train a new classifier bases upon the transform source data
     clf_forward.fit(transp_Xs, Y_source)
     
-    # Compute acc
     yt_predict = clf_forward.predict(G_te)
     
-    # time
     stop = timeit.default_timer()
     time = stop - start  
     
@@ -232,14 +221,12 @@ def Forward_GroupLasso_Transport(G_subsample, Y_subsample, regulizers, G_source,
     time : float
         Execution time in seconds.
     """
-    #time
     start = timeit.default_timer()
     
         
     otda = ot.da.SinkhornL1l2Transport(metric = metric, reg_e = regulizers[0], reg_cl = regulizers[1])
     otda.fit(Xs=G_subsample, ys=Y_subsample, Xt=G_val)
 
-    #transport taget samples onto source samples
     transp_Xs = otda.transform(Xs=G_source)
 
     if np.isnan(transp_Xs).any() or np.isinf(transp_Xs).any():
@@ -247,12 +234,9 @@ def Forward_GroupLasso_Transport(G_subsample, Y_subsample, regulizers, G_source,
         transp_Xs = np.nan_to_num(transp_Xs)
 
     clf_forward = clone(clf)
-    # train a new classifier bases upon the transform source data
     clf_forward.fit(transp_Xs, Y_source)
 
-    # Compute acc
     yt_predict = clf_forward.predict(G_te)   
-    # time
     stop = timeit.default_timer()
     time = stop - start 
         
@@ -289,24 +273,24 @@ def Backward_Sinkhorn_Transport(G_source, regulizers, G_val, G_te, lda, metric):
     time : float
         Execution time in seconds.
     """
-    # time
+    
     start = timeit.default_timer()
       
-    # Transport plan
+    
     botda = ot.da.SinkhornTransport(metric=metric, reg_e=regulizers)
     botda.fit(Xs=G_val, Xt=G_source)
     
-    #transport testing samples
+    
     transp_Xt_backward = botda.transform(Xs=G_te)
 
     if np.isnan(transp_Xt_backward).any() or np.isinf(transp_Xt_backward).any():
         print(f"DEBUG: Cleaning NaNs in Backward Sinkhorn Transport") 
         transp_Xt_backward = np.nan_to_num(transp_Xt_backward)
 
-    # Compute accuracy without retraining    
+     
     yt_predict = lda.predict(transp_Xt_backward)
     
-    # time
+    
     stop = timeit.default_timer()
     time = stop - start
     
@@ -346,23 +330,22 @@ def Backward_GroupLasso_Transport(G_source, regulizers, G_val, Y_val, G_te, lda,
         Execution time in seconds.
     """
 
-    #time
+    
     start = timeit.default_timer()
       
     botda = ot.da.SinkhornL1l2Transport(metric=metric, reg_e=regulizers[0], reg_cl=regulizers[1])
     botda.fit(Xs=G_val, ys=Y_val, Xt=G_source)
     
-    #transport testing samples
+    
     transp_Xt_backward=botda.transform(Xs=G_te)
     
     if np.isnan(transp_Xt_backward).any() or np.isinf(transp_Xt_backward).any():
         print(f"DEBUG: Cleaning NaNs in Backward GroupLasso Transport") 
         transp_Xt_backward = np.nan_to_num(transp_Xt_backward)
 
-    # Compute accuracy without retraining    
+      
     yt_predict = lda.predict(transp_Xt_backward)
     
-    # time
     stop = timeit.default_timer()
     time = stop - start
     
@@ -442,14 +425,14 @@ def RPA(Xtr, Xval, Xte, Ytr, Yval, Yte, transductive=False):
         covs_target_train = X_rpa_train[n_tr:]
         covs_target_test = X_rpa_te
 
-    # Para entrenar el MDM usamos las etiquetas ORIGINALES (int), no las encoded
+    
     covs_train = np.concatenate([covs_source, covs_target_train])
     y_train = np.concatenate([Ytr, Yval])
 
     clf = MDM()
     clf.fit(covs_train, y_train)
 
-    # Predict
+
     yt_predict = clf.predict(covs_target_test)
 
     stop = timeit.default_timer()
@@ -489,39 +472,39 @@ def EU(Xtr,Xval,Xte,Ytr,Yval,Yte):
         Execution time in seconds.
     """
     
-    # time
+    
     start = timeit.default_timer()
-    # Estimate single trial covariance
+    
     cov_tr = Covariances().transform(Xtr)
     cov_val= Covariances().transform(Xval)
     
     Ctr = cov_tr.mean(0)
     Cval = cov_val.mean(0)
     
-    # aligment
+    
     Xtr_eu = np.asarray([np.dot(invsqrtm(Ctr), epoch) for epoch in Xtr])
     Xval_eu = np.asarray([np.dot(invsqrtm(Cval), epoch) for epoch in Xval])
     Xte_eu = np.asarray([np.dot(invsqrtm(Cval), epoch) for epoch in Xte])
 
-    # append train and validation data
+    
     x_train = np.concatenate([Xtr_eu, Xval_eu])
     y_train = np.concatenate([Ytr, Yval])
 
-    # train new csp+lda
+    
     csp = CSP(n_components=6, reg='empirical', log=True, norm_trace=False, cov_est='epoch')
-    # learn csp filters
+    
     Gtr = csp.fit_transform(x_train,y_train)
     
-    # learn lda
+    
     lda = LinearDiscriminantAnalysis()
     lda.fit(Gtr,y_train)
     
-    # test
+    
     Gte = csp.transform(Xte_eu)  
-    # acc
+    
     yt_predict = lda.predict(Gte)
     
-    # time
+    
     stop = timeit.default_timer()
     time = stop - start
         

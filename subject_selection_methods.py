@@ -19,7 +19,7 @@ from sklearn.preprocessing import MinMaxScaler
 from structuredata import load_session_binary_mi
 
 
-# Common configuration
+
 EEG_CHANNELS = [
     'EEG-Fz', 'EEG-0', 'EEG-1', 'EEG-2', 'EEG-3', 'EEG-4', 'EEG-5',
     'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7', 'EEG-C4', 'EEG-8', 'EEG-9',
@@ -68,7 +68,7 @@ def load_subject_data_raw(subject_id, session='T', data_dir='data'):
     
     X, y, _ = load_session_binary_mi(
         str(gdf_file), EEG_CHANNELS, EOG_CHANNELS,
-        tmin=0.5, tmax=2.5, l_freq=0.5, h_freq=100,  # Minimal filtering for EEGNet
+        tmin=0.5, tmax=2.5, l_freq=0.5, h_freq=100, 
         reject_artifacts=True, true_labels_path=str(labels_file),
         verbose=False
     )
@@ -106,28 +106,22 @@ def calculate_csp_eigenvalue_ratio(subject_id, session='T', n_components=6):
 
     X, y = load_subject_data(subject_id, session)
 
-    # Separate data by class
     X_0 = X[y == 0]
     X_1 = X[y == 1]
 
-    # Compute covariance matrices for each class
+    
     cov_0 = np.mean([np.cov(trial) for trial in X_0], axis=0)
     cov_1 = np.mean([np.cov(trial) for trial in X_1], axis=0)
 
-    # Solve generalized eigenvalue problem: cov_0 * v = lambda * (cov_0 + cov_1) * v
-    # This gives the CSP eigenvalues
     eigenvalues, _ = eigh(cov_0, cov_0 + cov_1)
 
-    # Sort eigenvalues in descending order (most discriminative first)
+
     eigenvalues = np.sort(eigenvalues)[::-1]
 
-    # Select only n_components eigenvalues (matching CSP behavior)
     eigenvalues = eigenvalues[:n_components]
 
-    # Ratio del par más discriminativo (primero y último)
     ratio_max = eigenvalues[0] / eigenvalues[-1]
 
-    # Ratios de todos los pares
     n_pairs = n_components // 2
     ratios = []
     for i in range(n_pairs):
@@ -136,8 +130,7 @@ def calculate_csp_eigenvalue_ratio(subject_id, session='T', n_components=6):
 
     ratio_mean = np.mean(ratios)
 
-    # Score de separabilidad normalizado [0-100]
-    # Basado en escala logarítmica (ratio=2 → 0, ratio=100 → 100)
+
     separability_score = np.clip(20 * np.log10(ratio_mean), 0, 100)
 
     return {
@@ -149,37 +142,34 @@ def calculate_csp_eigenvalue_ratio(subject_id, session='T', n_components=6):
 
 
 
-# --- FUNCIÓN 1: Métrica del Centro de Riemann ---
 def calculate_riemannian_centrality(all_subjects, session='T'):
     """
-    Calcula la distancia Riemanniana de cada sujeto al 'Gran Promedio' de la población.
+    Calculate Riemannian distance of each subject to the population mean.
     
-    Pasos:
-    1. Calcula la matriz de covarianza promedio de cada sujeto.
-    2. Calcula el promedio de todos los sujetos (Grand Mean).
-    3. Mide la distancia de cada sujeto a ese Grand Mean.
-    
-    Retorna:
-    --------
-    dict : Diccionario {subject_id: distancia}
-           (Menor distancia = sujeto más representativo/central)
+    Measures how representative each subject is of the overall population
+    by computing the Riemannian distance from their mean covariance matrix
+    to the grand mean covariance across all subjects.
+
+    Parameters
+    ----------
+    all_subjects : list of int
+        List of subject identifiers to analyze.
+    session : str, default='T'
+        Session to analyze ('T' for training, 'E' for evaluation).
     """
     subject_means = {}
     valid_subjects = []
     
     print("Calculando centroides Riemannianos...")
     
-    # Paso 1: Obtener la covarianza media de cada sujeto individual
     for subj in all_subjects:
         try:
-            # Asume que load_subject_data está disponible en tu entorno
+        
             X, _ = load_subject_data(subj, session)
             
-            # Estimar covarianzas de los trials (matrices simétricas positivas definidas)
-            cov_estimator = Covariances(estimator='scm') # Sample Covariance Matrix
+            cov_estimator = Covariances(estimator='scm') 
             covs = cov_estimator.fit_transform(X)
             
-            # Calcular el punto medio Riemanniano de este sujeto
             mean_cov = mean_riemann(covs)
             
             subject_means[subj] = mean_cov
@@ -187,14 +177,12 @@ def calculate_riemannian_centrality(all_subjects, session='T'):
         except Exception as e:
             print(f"  [WARN] Omitiendo Sujeto {subj}: {e}")
             
-    if not valid_subjects:
-        raise ValueError("No se pudieron cargar datos para ningún sujeto.")
 
-    # Paso 2: Calcular el 'Gran Promedio' (El centroide de la población)
+
+
     population_covs = np.array([subject_means[s] for s in valid_subjects])
     grand_mean = mean_riemann(population_covs)
     
-    # Paso 3: Calcular distancias de cada uno al Gran Promedio
     distances = {}
     for subj in valid_subjects:
         dist = distance_riemann(subject_means[subj], grand_mean)
@@ -202,27 +190,52 @@ def calculate_riemannian_centrality(all_subjects, session='T'):
         
     return distances
 
-# --- FUNCIÓN 2: Combinación y Selección (CSP + Riemann) ---
+
 def select_best_source_subject(all_subjects, session='T', w_csp=0.4, w_riemann=0.6):
     """
-    Selecciona el mejor sujeto 'Source' combinando:
-    1. Calidad de señal (CSP Eigenvalue Ratio) -> Mayor es mejor.
-    2. Representatividad (Distancia Riemanniana) -> Menor es mejor.
+    Select the best source subject for transfer learning using a weighted score.
     
-    Parámetros:
-    -----------
-    all_subjects : list de ints
-    session : str
-    w_csp : float (peso para la calidad de señal)
-    w_riemann : float (peso para la centralidad)
+    Combines two complementary criteria:
+    1. Signal quality (CSP eigenvalue ratio) - higher is better
+    2. Population representativeness (Riemannian centrality) - lower distance is better
     
-    Retorna:
-    --------
-    best_subject : int (ID del sujeto ganador)
-    ranking_df : DataFrame (Tabla con todos los resultados ordenados)
+    The final score balances individual signal quality with how well the subject
+    represents the population, making them an ideal source for transfer learning.
+
+    Parameters
+    ----------
+    all_subjects : list of int
+        List of all subject identifiers to consider.
+    session : str, default='T'
+        Session to analyze ('T' for training, 'E' for evaluation).
+    w_csp : float, default=0.4
+        Weight for signal quality score (0-1).
+    w_riemann : float, default=0.6
+        Weight for centrality score (0-1).
+
+    Returns
+    -------
+    best_subject : int
+        Subject ID with the highest combined score.
+    ranking_df : pandas.DataFrame
+        Ranked table of all subjects with columns:
+        
+        - 'Subject' : int
+            Subject identifier.
+        - 'CSP_Raw' : float
+            Raw CSP eigenvalue ratio.
+        - 'Riemann_Dist' : float
+            Riemannian distance to population mean.
+        - 'Score_Quality' : float
+            Normalized signal quality score (0-1).
+        - 'Score_Centrality' : float
+            Normalized centrality score (0-1), inverted distance.
+        - 'Final_Score' : float
+            Weighted combination of quality and centrality (0-1).
+            
     """
     
-    # 1. Obtener métricas de Riemann (usando la Función 1)
+    
     riemann_dists = calculate_riemannian_centrality(all_subjects, session)
     
     results = []
@@ -230,35 +243,32 @@ def select_best_source_subject(all_subjects, session='T', w_csp=0.4, w_riemann=0
     print("Calculando ratios CSP y combinando scores...")
     
     for subj in riemann_dists.keys():
-        # 2. Obtener métricas de CSP (usando TU función provista)
+        
         csp_metrics = calculate_csp_eigenvalue_ratio(subj, session)
         
-        # Extraemos el valor crudo que nos interesa
-        # 'ratio_mean' suele ser más robusto que 'ratio_max'
+
         csp_score_raw = csp_metrics['ratio_mean']
         
         results.append({
             'Subject': subj,
-            'CSP_Raw': csp_score_raw,              # Mayor es mejor
-            'Riemann_Dist': riemann_dists[subj]    # Menor es mejor
+            'CSP_Raw': csp_score_raw,              
+            'Riemann_Dist': riemann_dists[subj]    
         })
     
     df = pd.DataFrame(results)
     scaler = MinMaxScaler()
     
-    # 3. Normalización y Scoreo
     
-    # A. Normalizar CSP (0 a 1)
+    
     df['Score_Quality'] = scaler.fit_transform(df[['CSP_Raw']])
     
-    # B. Normalizar e INVERTIR Riemann (para que 1 sea el "mejor" / más cercano)
     dist_norm = scaler.fit_transform(df[['Riemann_Dist']])
     df['Score_Centrality'] = 1 - dist_norm 
     
-    # C. Score Final Ponderado
+    
     df['Final_Score'] = (w_csp * df['Score_Quality']) + (w_riemann * df['Score_Centrality'])
     
-    # 4. Ordenar ranking (Descendente: mejor score arriba)
+    
     df_ranked = df.sort_values('Final_Score', ascending=False).reset_index(drop=True)
     
     best_subject = int(df_ranked.iloc[0]['Subject'])

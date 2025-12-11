@@ -33,8 +33,8 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
         self.reg = reg
         self.csp = CSP(n_components=n_components, reg=None, log=True, norm_trace=False)
         self.lda = LinearDiscriminantAnalysis(solver='lsqr', shrinkage=reg)
-        self._n_eeg_channels = None  # Set during fit
-
+        self._n_eeg_channels = None  
+        
     def fit(self, X, y):
         """
         Fit CSP + LDA pipeline.
@@ -50,14 +50,11 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
         -------
         self
         """
-        # Store number of EEG channels for later inference
         self._n_eeg_channels = X.shape[1]
         
-        # Extract CSP features
         self.csp.fit(X, y)
         X_csp = self.csp.transform(X)
 
-        # Train LDA on CSP features
         self.lda.fit(X_csp, y)
 
         return self
@@ -76,11 +73,9 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
         bool
             True if X appears to be CSP features, False if raw EEG.
         """
-        # 3D array is definitely raw EEG
         if X.ndim == 3:
             return False
         
-        # 2D array is CSP features (or some other transformed representation)
         if X.ndim == 2:
             return True
         
@@ -105,10 +100,8 @@ class CSP_LDA(BaseEstimator, ClassifierMixin):
             Predicted class labels.
         """
         if self._is_csp_features(X):
-            # Input is already CSP features, use LDA directly
             return self.lda.predict(X)
         else:
-            # Input is raw EEG, apply CSP first
             X_csp = self.csp.transform(X)
             return self.lda.predict(X_csp)
 

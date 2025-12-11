@@ -44,7 +44,7 @@ class EEGDataset(Dataset):
         if self.transform:
             x = self.transform(x)
 
-        # Add channel dimension for Conv2d: (Chans, Samples) -> (1, Chans, Samples)
+        
         x = torch.from_numpy(x).float().unsqueeze(0)
         y = torch.tensor(y).long()
 
@@ -145,7 +145,7 @@ def train_epoch(model, train_loader, criterion, optimizer, device, apply_max_nor
         loss.backward()
         optimizer.step()
         
-        # Apply max_norm constraint if model has it
+        
         if apply_max_norm and hasattr(model, '_apply_max_norm'):
             model._apply_max_norm()
         
@@ -342,13 +342,13 @@ def finetune_model(model, train_loader, val_loader=None, epochs=50, lr=1e-4,
     history : dict
         Fine-tuning history.
     """
-    # Freeze layers if requested
+    
     if freeze_temporal and hasattr(model, 'freeze_temporal_layers'):
         model.freeze_temporal_layers()
         if verbose:
             print("Temporal layers frozen for fine-tuning")
     
-    # Train with lower learning rate
+    
     model, history = train_model(
         model, train_loader, val_loader,
         epochs=epochs, lr=lr, patience=patience,
