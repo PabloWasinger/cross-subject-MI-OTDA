@@ -19,19 +19,25 @@ from sklearn.preprocessing import MinMaxScaler
 from structuredata import load_session_binary_mi
 
 
+# Common configuration
+EEG_CHANNELS = [
+    'EEG-Fz', 'EEG-0', 'EEG-1', 'EEG-2', 'EEG-3', 'EEG-4', 'EEG-5',
+    'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7', 'EEG-C4', 'EEG-8', 'EEG-9',
+    'EEG-10', 'EEG-11', 'EEG-12', 'EEG-13', 'EEG-14', 'EEG-Pz',
+    'EEG-15', 'EEG-16'
+]
+EOG_CHANNELS = ['EOG-left', 'EOG-central', 'EOG-right']
+
+
 def load_subject_data(subject_id, session='T', data_dir='data'):
-    """Load data for a single subject and session."""
+    """
+    Load data for a single subject with bandpass filter (8-30 Hz).
+    
+    Use for CSP+LDA methods that require mu/beta band filtering.
+    """
     DATA_DIR = Path(data_dir)
     GDF_DIR = DATA_DIR / "gdf"
     LABELS_DIR = DATA_DIR / "labels"
-    
-    EEG_CHANNELS = [
-        'EEG-Fz', 'EEG-0', 'EEG-1', 'EEG-2', 'EEG-3', 'EEG-4', 'EEG-5',
-        'EEG-C3', 'EEG-6', 'EEG-Cz', 'EEG-7', 'EEG-C4', 'EEG-8', 'EEG-9',
-        'EEG-10', 'EEG-11', 'EEG-12', 'EEG-13', 'EEG-14', 'EEG-Pz',
-        'EEG-15', 'EEG-16'
-    ]
-    EOG_CHANNELS = ['EOG-left', 'EOG-central', 'EOG-right']
     
     gdf_file = GDF_DIR / f"A{subject_id:02d}{session}.gdf"
     labels_file = LABELS_DIR / f"A{subject_id:02d}{session}.mat"
@@ -39,6 +45,30 @@ def load_subject_data(subject_id, session='T', data_dir='data'):
     X, y, _ = load_session_binary_mi(
         str(gdf_file), EEG_CHANNELS, EOG_CHANNELS,
         tmin=0.5, tmax=2.5, l_freq=8, h_freq=30,
+        reject_artifacts=True, true_labels_path=str(labels_file),
+        verbose=False
+    )
+    
+    return X, y
+
+
+def load_subject_data_raw(subject_id, session='T', data_dir='data'):
+    """
+    Load data for a single subject WITHOUT bandpass filter.
+    
+    Use for EEGNet methods - the network learns its own temporal filters.
+    Only applies minimal filtering (0.5-100 Hz) for DC removal and anti-aliasing.
+    """
+    DATA_DIR = Path(data_dir)
+    GDF_DIR = DATA_DIR / "gdf"
+    LABELS_DIR = DATA_DIR / "labels"
+    
+    gdf_file = GDF_DIR / f"A{subject_id:02d}{session}.gdf"
+    labels_file = LABELS_DIR / f"A{subject_id:02d}{session}.mat"
+    
+    X, y, _ = load_session_binary_mi(
+        str(gdf_file), EEG_CHANNELS, EOG_CHANNELS,
+        tmin=0.5, tmax=2.5, l_freq=0.5, h_freq=100,  # Minimal filtering for EEGNet
         reject_artifacts=True, true_labels_path=str(labels_file),
         verbose=False
     )

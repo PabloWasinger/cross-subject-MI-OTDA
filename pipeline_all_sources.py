@@ -21,7 +21,7 @@ from pipeline_comparison import (
     calculate_accuracies, EEGNET_CONFIG, EEGNET_BOTDA_CONFIG,
     CV_PARAMS, N_CALIB, RANDOM_SEED, SUBJECTS
 )
-from subject_selection_methods import load_subject_data
+from subject_selection_methods import load_subject_data, load_subject_data_raw
 
 # Directorios específicos para esta variante
 RESULTS_DIR = Path("results") / "all_sources"
@@ -35,8 +35,11 @@ SESSIONS = ['T', 'E']
 def load_all_sources_data(target_id, subjects=SUBJECTS, sessions=SESSIONS):
     """
     Load data from all subjects except target, using both sessions.
+    
+    Returns both filtered (8-30 Hz) and raw (0.5-100 Hz) data.
     """
-    X_all = []
+    X_filt_all = []
+    X_raw_all = []
     y_all = []
     source_subjects = [s for s in subjects if s != target_id]
     
@@ -46,19 +49,22 @@ def load_all_sources_data(target_id, subjects=SUBJECTS, sessions=SESSIONS):
         subj_trials = 0
         for sess in sessions:
             try:
-                X, y = load_subject_data(subj, session=sess)
-                X_all.append(X)
+                X_filt, y = load_subject_data(subj, session=sess)      # 8-30 Hz
+                X_raw, _ = load_subject_data_raw(subj, session=sess)   # 0.5-100 Hz
+                X_filt_all.append(X_filt)
+                X_raw_all.append(X_raw)
                 y_all.append(y)
                 subj_trials += len(y)
             except Exception as e:
                 print(f"  Warning: Could not load S{subj}-{sess}: {e}")
         source_info['trials_per_subject'][subj] = subj_trials
     
-    X_source = np.concatenate(X_all, axis=0)
+    X_source_filt = np.concatenate(X_filt_all, axis=0)
+    X_source_raw = np.concatenate(X_raw_all, axis=0)
     y_source = np.concatenate(y_all, axis=0)
     source_info['total_trials'] = len(y_source)
     
-    return X_source, y_source, source_info
+    return X_source_filt, X_source_raw, y_source, source_info
 
 
 def save_results(target_id, predictions, times, y_test, source_info):
@@ -106,36 +112,38 @@ def main():
         print(f"{'='*70}")
         
         try:
-            # Load sources (all except target, both sessions)
+            # Load sources (all except target, both sessions) - filtered AND raw
             print(f"\nLoading source data (all subjects except S{target_id})...")
-            X_source, y_source, source_info = load_all_sources_data(target_id)
+            X_source_filt, X_source_raw, y_source, source_info = load_all_sources_data(target_id)
             print(f"  Subjects: {source_info['subjects']}")
             print(f"  Total trials: {source_info['total_trials']}")
             print(f"  Class distribution: {np.bincount(y_source)}")
             
-            # Load target (session T only)
+            # Load target (session T only) - filtered AND raw
             print(f"\nLoading target data (S{target_id}, session T)...")
-            X_target, y_target = load_subject_data(target_id, session='T')
-            print(f"  Shape: {X_target.shape}, Classes: {np.bincount(y_target)}")
+            X_target_filt, y_target = load_subject_data(target_id, session='T')      # 8-30 Hz
+            X_target_raw, _ = load_subject_data_raw(target_id, session='T')           # 0.5-100 Hz
+            print(f"  Shape: {X_target_filt.shape}, Classes: {np.bincount(y_target)}")
             
-            # Train EEGNet models
-            print("\nTraining EEGNet models...")
+            # Train EEGNet models on RAW data (no bandpass filter)
+            print("\nTraining EEGNet models (RAW data - no bandpass)...")
             
             model_path = MODELS_DIR / f'eegnet_allsrc_tgt_{target_id:02d}.pt'
             eegnet_model, history = train_eegnet_on_source(
-                X_source, y_source, config=EEGNET_CONFIG,
+                X_source_raw, y_source, config=EEGNET_CONFIG,  # RAW data
                 save_path=str(model_path), verbose=True
             )
             
             model_botda_path = MODELS_DIR / f'eegnet_botda_allsrc_tgt_{target_id:02d}.pt'
             eegnet_botda, history_botda = train_eegnet_on_source(
-                X_source, y_source, config=EEGNET_BOTDA_CONFIG,
+                X_source_raw, y_source, config=EEGNET_BOTDA_CONFIG,  # RAW data
                 save_path=str(model_botda_path), verbose=True
             )
             
-            # Evaluate
+            # Evaluate - pass both filtered and raw data
             predictions, times, y_test = evaluate_methods_samplewise(
-                X_source, y_source, X_target, y_target,
+                X_source_filt, X_source_raw, y_source,    # Source: filtered + raw
+                X_target_filt, X_target_raw, y_target,    # Target: filtered + raw
                 eegnet_model, eegnet_botda, CV_PARAMS,
                 n_calib=N_CALIB, verbose=True
             )
