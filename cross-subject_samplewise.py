@@ -57,7 +57,7 @@ CV_PARAMS = {
     'reg_e_grid': [0.1, 0.5, 1, 2, 5, 10, 20],
     'reg_cl_grid': [0.1, 0.5, 1, 2, 5, 10, 20],
     'metric': 'sqeuclidean',
-    'outerkfold': 5, # Reduced for cross-subject speed
+    'outerkfold': 10, # Reduced for cross-subject speed
     'innerkfold': None,  #LOO
     'M': N_CALIB,
     'norm': None
