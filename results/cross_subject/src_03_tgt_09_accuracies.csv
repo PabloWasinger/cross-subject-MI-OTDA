@@ -1,0 +1,9 @@
+Method,Accuracy,Correct,Total
+Backward_GroupLasso,97.5,117,120
+RPA,95.0,114,120
+EU,95.0,114,120
+Backward_Sinkhorn,94.16666666666667,113,120
+SR,92.5,111,120
+Forward_GroupLasso,91.66666666666666,110,120
+Forward_Sinkhorn,86.66666666666667,104,120
+SC,65.0,78,120
